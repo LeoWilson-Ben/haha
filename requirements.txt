@@ -1,0 +1,11 @@
+# 需求：MySQL 8.0 + Redis，连接方式见需求文档末尾
+Django>=5.0,<6
+djangorestframework>=3.14
+django-cors-headers>=4.3
+PyMySQL>=1.1
+redis>=5.0
+django-redis>=5.4
+openai>=1.0
+alibabacloud_dypnsapi20170525>=2.0.0,<3.0.0
+alibabacloud_tea_openapi>=0.3.0
+oss2>=2.18.0

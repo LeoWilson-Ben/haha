@@ -1,0 +1,2 @@
+-- 为 post 表增加自定义标签字段（若表已存在且无该列时执行一次）
+-- MySQL: ALTER TABLE post ADD COLUMN tags_json VARCHAR(500) DEFAULT NULL COMMENT '自定义标签名 JSON 数组';

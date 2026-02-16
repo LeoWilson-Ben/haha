@@ -1,0 +1,30 @@
+from django.urls import path
+from . import views
+
+urlpatterns = [
+    path("topics", views.topic_list),
+    path("feed", views.feed),
+    path("post", views.create_post),
+    path("post/<int:post_id>", views.post_detail),
+    path("post/<int:post_id>/comments", views.comment_list),
+    path("post/<int:post_id>/comment", views.add_comment),
+    path("post/<int:post_id>/like", views.post_like),
+    path("post/<int:post_id>/favorite", views.post_favorite),
+    path("post/<int:post_id>/share", views.post_share),
+    path("post/<int:post_id>/delete", views.post_delete),
+    path("topic/<int:topic_id>/feed", views.topic_feed),
+    path("favorites", views.my_favorites),
+    path("user/search", views.user_search),
+    path("user/<int:user_id>/profile", views.user_profile),
+    path("user/by-code/<str:user_code>", views.user_by_code),
+    path("user/<int:user_id>/posts", views.user_posts),
+    path("user/<int:target_user_id>/follow", views.follow_toggle),
+    path("user/<int:user_id>/following", views.is_following),
+    path("user/me/following-list", views.my_following_list),
+    path("user/me/followers", views.my_followers_list),
+    path("masters", views.masters_list),
+    path("notifications", views.notification_list),
+    path("notifications/unread-count", views.notification_unread_count),
+    path("notifications/read", views.notification_mark_read),
+    path("report", views.report_create),
+]
