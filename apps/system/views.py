@@ -138,6 +138,134 @@ def upload(request):
 
     # 已不再使用本地 media 存储，请配置并启用 OSS（ALIYUN_OSS_ENABLED=1, ALIYUN_OSS_BUCKET）或临时关闭 OSS 时设 ALIYUN_OSS_ENABLED=0 并取消下面注释以回退到本地
     return Response(_result(503, "上传服务未配置 OSS，请联系管理员"), status=503)
+
+
+def _require_upload_auth(request):
+    """校验上传相关接口的登录态，返回 (user_id, None) 或 (None, Response)。"""
+    from apps.account.session_store import get_user_id_by_token
+    auth = request.META.get("HTTP_AUTHORIZATION") or ""
+    if not auth.startswith("Bearer "):
+        return None, Response(_result(401, "请先登录"), status=status.HTTP_401_UNAUTHORIZED)
+    token = auth[7:].strip()
+    uid = get_user_id_by_token(token)
+    if not uid:
+        return None, Response(_result(401, "请先登录"), status=status.HTTP_401_UNAUTHORIZED)
+    return uid, None
+
+
+@api_view(["POST"])
+@permission_classes([AllowAny])
+def presign_upload(request):
+    """
+    获取直传 OSS 的预签名 URL，避免文件经后端转发。
+    body: { "type": "image" | "video" }，可选 "ext": ".mp4" 等。
+    返回: { uploadUrl, url, objectKey }。客户端用 PUT uploadUrl 上传文件，url 为展示用签名读链接。
+    """
+    uid, err_resp = _require_upload_auth(request)
+    if err_resp is not None:
+        return err_resp
+    if not getattr(settings, "ALIYUN_OSS_ENABLED", False) or not getattr(settings, "ALIYUN_OSS_BUCKET", ""):
+        return Response(_result(503, "上传服务未配置 OSS"), status=503)
+    upload_type = (request.data.get("type") or request.GET.get("type") or "image").strip().lower()
+    if upload_type not in ("image", "video"):
+        upload_type = "image"
+    ext = (request.data.get("ext") or request.GET.get("ext") or (".mp4" if upload_type == "video" else ".jpg")).strip().lower()
+    if upload_type == "video" and ext not in _UPLOAD_VIDEO_EXTS:
+        ext = ".mp4"
+    if upload_type == "image" and ext not in _UPLOAD_IMAGE_EXTS:
+        ext = ".jpg"
+    oss_folder = "video" if upload_type == "video" else "image"
+    name = f"{uuid.uuid4().hex}{ext}"
+    object_key = f"{oss_folder}/{name}"
+    from .oss_upload import get_presigned_upload_urls
+    read_expires = getattr(settings, "ALIYUN_OSS_SIGNED_URL_EXPIRES", 604800)
+    upload_url, read_url, err = get_presigned_upload_urls(
+        object_key,
+        bucket=settings.ALIYUN_OSS_BUCKET,
+        endpoint=settings.ALIYUN_OSS_ENDPOINT,
+        credential_file=settings.ALIYUN_OSS_CREDENTIAL_FILE,
+        upload_expires=3600,
+        read_expires=read_expires,
+    )
+    if err:
+        return Response(_result(500, err or "生成上传链接失败"), status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+    return Response(_result(data={"uploadUrl": upload_url, "url": read_url, "objectKey": object_key}))
+
+
+@api_view(["POST"])
+@permission_classes([AllowAny])
+def confirm_upload(request):
+    """
+    视频直传 OSS 后，由后端拉取视频、截封面并上传封面，返回展示用 url 与 coverUrl。
+    body: { "objectKey": "video/xxx.mp4" }。
+    """
+    uid, err_resp = _require_upload_auth(request)
+    if err_resp is not None:
+        return err_resp
+    object_key = (request.data.get("objectKey") or request.GET.get("objectKey") or "").strip()
+    if not object_key or not object_key.startswith("video/"):
+        return Response(_result(400, "缺少或无效的 objectKey"), status=status.HTTP_400_BAD_REQUEST)
+    if not getattr(settings, "ALIYUN_OSS_ENABLED", False) or not getattr(settings, "ALIYUN_OSS_BUCKET", ""):
+        return Response(_result(503, "上传服务未配置 OSS"), status=503)
+    from .oss_upload import download_oss_to_path, upload_path_to_oss, get_presigned_upload_urls
+    from .video_cover import extract_first_frame
+    tmp_video = None
+    tmp_cover = None
+    try:
+        fd, tmp_path = tempfile.mkstemp(suffix=Path(object_key).suffix or ".mp4", prefix="confirm_video_")
+        tmp_video = Path(tmp_path)
+        os.close(fd)
+        ok, err = download_oss_to_path(
+            object_key,
+            str(tmp_video),
+            bucket=settings.ALIYUN_OSS_BUCKET,
+            endpoint=settings.ALIYUN_OSS_ENDPOINT,
+            credential_file=settings.ALIYUN_OSS_CREDENTIAL_FILE,
+        )
+        if not ok:
+            return Response(_result(500, err or "拉取视频失败"), status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+        read_expires = getattr(settings, "ALIYUN_OSS_SIGNED_URL_EXPIRES", 604800)
+        upload_url, read_url, _ = get_presigned_upload_urls(
+            object_key,
+            bucket=settings.ALIYUN_OSS_BUCKET,
+            endpoint=settings.ALIYUN_OSS_ENDPOINT,
+            credential_file=settings.ALIYUN_OSS_CREDENTIAL_FILE,
+            upload_expires=60,
+            read_expires=read_expires,
+        )
+        if not read_url:
+            return Response(_result(500, "生成视频链接失败"), status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+        cover_url = None
+        cover_path = extract_first_frame(tmp_video)
+        if cover_path:
+            tmp_cover = cover_path
+            cover_name = f"{Path(object_key).stem}_cover.jpg"
+            cover_object = f"video_cover/{cover_name}"
+            cover_url, cover_err = upload_path_to_oss(
+                cover_path,
+                cover_object,
+                bucket=settings.ALIYUN_OSS_BUCKET,
+                endpoint=settings.ALIYUN_OSS_ENDPOINT,
+                credential_file=settings.ALIYUN_OSS_CREDENTIAL_FILE,
+                signed_url_expires=read_expires,
+            )
+            if cover_err:
+                cover_url = None
+        result_data = {"url": read_url}
+        if cover_url:
+            result_data["coverUrl"] = cover_url
+        return Response(_result(data=result_data))
+    finally:
+        if tmp_video and tmp_video.exists():
+            try:
+                tmp_video.unlink()
+            except Exception:
+                pass
+        if tmp_cover and Path(tmp_cover).exists():
+            try:
+                Path(tmp_cover).unlink()
+            except Exception:
+                pass
     # 本地存储（仅当需要临时回退时取消注释）
     # root = getattr(settings, "MEDIA_ROOT", None)
     # url_prefix = getattr(settings, "MEDIA_URL", "media/")
