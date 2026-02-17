@@ -374,11 +374,11 @@ def get_ip_location_for_request(request):
         return "本地"
     if ip.startswith("192.168.") or ip.startswith("10.") or ip.startswith("172."):
         return "内网"
-    loc = _fetch_ip_location_antping(ip)
+    loc = _fetch_ip_location_ipapi(ip)
     if not loc:
         loc = _fetch_ip_location_tool_lu(ip)
     if not loc:
-        loc = _fetch_ip_location_ipapi(ip)
+        loc = _fetch_ip_location_antping(ip)
     return loc
 
 
@@ -391,11 +391,11 @@ def ip_location(request):
         return Response(_result(data={"ip": ip or "", "location": "本地"}))
     if ip.startswith("192.168.") or ip.startswith("10.") or ip.startswith("172."):
         return Response(_result(data={"ip": ip, "location": "内网"}))
-    location = _fetch_ip_location_antping(ip)
+    location = _fetch_ip_location_ipapi(ip)
     if not location:
         location = _fetch_ip_location_tool_lu(ip)
     if not location:
-        location = _fetch_ip_location_ipapi(ip)
+        location = _fetch_ip_location_antping(ip)
     if not location:
         location = "未知"
     return Response(_result(data={"ip": ip, "location": location}))
