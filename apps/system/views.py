@@ -11,7 +11,7 @@ from rest_framework.decorators import api_view, permission_classes
 from rest_framework.permissions import AllowAny
 from rest_framework.response import Response
 
-from .models import Banner
+from .models import Banner, Announcement
 
 # 上传允许的扩展名：头像/帖子图片 + 帖子视频
 _UPLOAD_IMAGE_EXTS = (".jpg", ".jpeg", ".png", ".gif", ".webp")
@@ -34,6 +34,29 @@ def banners(request):
         Q(end_at__isnull=True) | Q(end_at__gte=now)
     ).order_by("sort_order", "id")[:10]
     items = [{"id": b.id, "imageUrl": b.image_url, "linkUrl": b.link_url or "", "sortOrder": b.sort_order} for b in qs]
+    return Response(_result(data=items))
+
+
+@api_view(["GET"])
+@permission_classes([AllowAny])
+def announcements(request):
+    """公告列表：返回后台配置的公告，按 sort_order 降序、created_at 降序"""
+    now = timezone.now()
+    qs = Announcement.objects.filter(status=1).filter(
+        Q(start_at__isnull=True) | Q(start_at__lte=now)
+    ).filter(
+        Q(end_at__isnull=True) | Q(end_at__gte=now)
+    ).order_by("-sort_order", "-created_at")[:50]
+    items = [
+        {
+            "id": a.id,
+            "title": a.title,
+            "content": a.content or "",
+            "linkUrl": a.link_url or "",
+            "createdAt": a.created_at.strftime("%Y-%m-%d %H:%M") if a.created_at else None,
+        }
+        for a in qs
+    ]
     return Response(_result(data=items))
 
 

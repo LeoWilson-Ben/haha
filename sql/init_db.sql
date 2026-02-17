@@ -395,6 +395,20 @@ CREATE TABLE IF NOT EXISTS `banner` (
     PRIMARY KEY (`id`)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci COMMENT='轮播图/开屏';
 
+CREATE TABLE IF NOT EXISTS `announcement` (
+    `id` BIGINT NOT NULL AUTO_INCREMENT,
+    `title` VARCHAR(128) NOT NULL COMMENT '标题',
+    `content` TEXT DEFAULT NULL COMMENT '正文',
+    `link_url` VARCHAR(512) DEFAULT NULL COMMENT '可选跳转链接',
+    `status` TINYINT NOT NULL DEFAULT 1 COMMENT '0下架 1展示',
+    `sort_order` INT NOT NULL DEFAULT 0 COMMENT '排序，越大越靠前',
+    `start_at` DATETIME DEFAULT NULL,
+    `end_at` DATETIME DEFAULT NULL,
+    `created_at` DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    PRIMARY KEY (`id`),
+    KEY `idx_status_time` (`status`, `created_at`)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci COMMENT='后台公告';
+
 CREATE TABLE IF NOT EXISTS `agreement` (
     `id` BIGINT NOT NULL AUTO_INCREMENT,
     `type` VARCHAR(32) NOT NULL COMMENT 'privacy/user_agreement',
