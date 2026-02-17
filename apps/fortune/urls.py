@@ -10,6 +10,8 @@ urlpatterns = [
     path("xiyongshen-match", views.xiyongshen_match),
     path("fate-match", views.fate_match),
     path("fengshui", views.fengshui_analyze),
+    path("ai-master-chat/history", views.ai_master_chat_history),
+    path("ai-master-chat/new", views.ai_master_chat_new),
     path("ai-master-chat", views.ai_master_chat),
     path("constitution-questions", views.constitution_questions),
     path("constitution-test", views.constitution_test),

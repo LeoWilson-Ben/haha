@@ -476,12 +476,100 @@ def constitution_test(request):
         )
 
 
+def _get_ai_chat_messages(session_id):
+    """从 DB 加载会话的历史消息，供 LLM 使用。"""
+    messages = []
+    try:
+        with connection.cursor() as c:
+            c.execute(
+                "SELECT role, content FROM ai_master_chat_message WHERE session_id = %s ORDER BY created_at ASC",
+                [session_id],
+            )
+            for row in c.fetchall():
+                messages.append({"role": row[0], "content": (row[1] or "").strip()})
+    except Exception:
+        pass
+    return messages
+
+
+@api_view(["GET"])
+@permission_classes([AllowAny])
+def ai_master_chat_history(request):
+    """
+    获取 AI 名师聊天历史。需登录。
+    GET ?session_id=xxx 指定会话；不传则返回最近一次会话的历史。
+    """
+    user_id = _user_id_from_request(request)
+    if not user_id:
+        return Response(_result(401, "请先登录"), status=status.HTTP_401_UNAUTHORIZED)
+
+    session_id = request.GET.get("session_id")
+    if session_id:
+        try:
+            session_id = int(session_id)
+        except (TypeError, ValueError):
+            session_id = None
+
+    if not session_id:
+        try:
+            with connection.cursor() as c:
+                c.execute(
+                    "SELECT id FROM ai_master_chat_session WHERE user_id = %s ORDER BY created_at DESC LIMIT 1",
+                    [user_id],
+                )
+                row = c.fetchone()
+                session_id = row[0] if row else None
+        except Exception:
+            session_id = None
+
+    if not session_id:
+        return Response(_result(data={"sessionId": None, "messages": []}))
+
+    messages = []
+    try:
+        with connection.cursor() as c:
+            c.execute(
+                "SELECT role, content, created_at FROM ai_master_chat_message WHERE session_id = %s ORDER BY created_at ASC",
+                [session_id],
+            )
+            for row in c.fetchall():
+                messages.append({
+                    "role": row[0],
+                    "content": (row[1] or "").strip(),
+                    "createdAt": row[2].isoformat() if row[2] and hasattr(row[2], "isoformat") else str(row[2]),
+                })
+    except Exception:
+        pass
+
+    return Response(_result(data={"sessionId": session_id, "messages": messages}))
+
+
+@api_view(["POST"])
+@permission_classes([AllowAny])
+def ai_master_chat_new(request):
+    """创建新会话。需登录。返回 session_id。"""
+    user_id = _user_id_from_request(request)
+    if not user_id:
+        return Response(_result(401, "请先登录"), status=status.HTTP_401_UNAUTHORIZED)
+
+    try:
+        with connection.cursor() as c:
+            c.execute(
+                "INSERT INTO ai_master_chat_session (user_id) VALUES (%s)",
+                [user_id],
+            )
+            session_id = c.lastrowid
+        return Response(_result(data={"sessionId": session_id}))
+    except Exception:
+        return Response(_result(500, "创建会话失败"), status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+
+
 @api_view(["POST"])
 @permission_classes([AllowAny])
 def ai_master_chat(request):
     """
-    AI 名师对话：用户发送消息，AI 以传统文化名师身份回复。需登录。
-    body: { "message": "用户输入" }
+    AI 名师对话：用户发送消息，AI 以传统文化名师身份回复，支持历史上下文。需登录。
+    body: { "message": "用户输入", "sessionId": 可选，不传则创建新会话 }
     """
     user_id = _user_id_from_request(request)
     if not user_id:
@@ -490,10 +578,39 @@ def ai_master_chat(request):
     if not msg:
         return Response(_result(400, "请输入消息"), status=status.HTTP_400_BAD_REQUEST)
 
-    prompt = f"""你是一位精通传统文化、八字命理、风水等学问的资深名师。用户向你咨询：
-「{msg}」
+    session_id = request.data.get("sessionId")
+    if session_id is not None:
+        try:
+            session_id = int(session_id)
+        except (TypeError, ValueError):
+            session_id = None
 
-请用专业、温和、易懂的语气回答，可适当引用传统文化智慧，控制在 300 字以内。"""
+    if not session_id:
+        try:
+            with connection.cursor() as c:
+                c.execute(
+                    "INSERT INTO ai_master_chat_session (user_id) VALUES (%s)",
+                    [user_id],
+                )
+                session_id = c.lastrowid
+        except Exception:
+            return Response(_result(500, "创建会话失败"), status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+
+    try:
+        with connection.cursor() as c:
+            c.execute(
+                "INSERT INTO ai_master_chat_message (session_id, role, content) VALUES (%s, 'user', %s)",
+                [session_id, msg],
+            )
+    except Exception:
+        pass
+
+    history = _get_ai_chat_messages(session_id)
+    llm_messages = [
+        {"role": "system", "content": "你是传统文化名师，精通八字命理、风水、国学等，用专业且亲和的语气为用户解答。根据对话历史理解上下文，回复控制在 300 字以内。"},
+    ]
+    for h in history:
+        llm_messages.append({"role": h["role"], "content": h["content"]})
 
     try:
         from openai import OpenAI
@@ -503,14 +620,21 @@ def ai_master_chat(request):
         )
         completion = client.chat.completions.create(
             model="qwen-plus",
-            messages=[
-                {"role": "system", "content": "你是传统文化名师，精通八字命理、风水、国学等，用专业且亲和的语气为用户解答。"},
-                {"role": "user", "content": prompt},
-            ],
+            messages=llm_messages,
             timeout=60.0,
         )
         content = (completion.choices[0].message.content if completion.choices else "").strip() or "抱歉，暂未生成回复，请稍后再试。"
-        return Response(_result(data={"content": content}))
+
+        try:
+            with connection.cursor() as c:
+                c.execute(
+                    "INSERT INTO ai_master_chat_message (session_id, role, content) VALUES (%s, 'assistant', %s)",
+                    [session_id, content],
+                )
+        except Exception:
+            pass
+
+        return Response(_result(data={"content": content, "sessionId": session_id}))
     except Exception as e:
         logger.exception("AI名师对话失败")
         return Response(
