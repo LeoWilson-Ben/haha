@@ -462,26 +462,33 @@ def user_search(request):
 
 
 def _get_user_profile_ext(user_id):
-    """从 user_profile 表读取 intro、birth_date、birth_time"""
+    """从 user_profile 表读取 intro、birth_date、birth_time、region_code"""
     try:
         with connection.cursor() as c:
             c.execute(
-                "SELECT intro, birth_date, birth_time FROM user_profile WHERE user_id = %s",
+                "SELECT intro, birth_date, birth_time, region_code FROM user_profile WHERE user_id = %s",
                 [user_id],
             )
             row = c.fetchone()
     except Exception:
-        with connection.cursor() as c:
-            c.execute("SELECT intro, birth_date FROM user_profile WHERE user_id = %s", [user_id])
-            row = c.fetchone()
+        try:
+            with connection.cursor() as c:
+                c.execute("SELECT intro, birth_date, birth_time FROM user_profile WHERE user_id = %s", [user_id])
+                row = c.fetchone()
+        except Exception:
+            with connection.cursor() as c:
+                c.execute("SELECT intro, birth_date FROM user_profile WHERE user_id = %s", [user_id])
+                row = c.fetchone()
     if row:
         birth_time = str(row[2]).strip() if len(row) > 2 and row[2] else None
+        region = (str(row[3]).strip() if len(row) > 3 and row[3] else None) or None
         return {
             "intro": row[0] or "",
             "birthDate": row[1].strftime("%Y-%m-%d") if row[1] else None,
             "birthTime": birth_time,
+            "regionCode": region,
         }
-    return {"intro": "", "birthDate": None, "birthTime": None}
+    return {"intro": "", "birthDate": None, "birthTime": None, "regionCode": None}
 
 
 @api_view(["GET"])
@@ -519,6 +526,7 @@ def user_profile(request, user_id):
         "intro": prof["intro"],
         "birthDate": prof["birthDate"],
         "birthTime": prof.get("birthTime"),
+        "locationCode": prof.get("regionCode"),
         "followCount": follow_count,
         "followerCount": follower_count,
         "postCount": post_count,
