@@ -8,6 +8,7 @@ urlpatterns = [
     path("loginByPassword", views.login_by_password),
     path("resetPassword", views.reset_password),
     path("me", views.me),
+    path("location", views.user_location),
     path("updateProfile", views.update_profile),
     path("wallet/balance", views.wallet_balance),
     path("wallet/log", views.wallet_log_list),

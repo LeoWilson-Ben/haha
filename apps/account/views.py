@@ -423,6 +423,62 @@ def me(request):
     }))
 
 
+@api_view(["GET", "POST"])
+def user_location(request):
+    """GET：返回当前用户保存的定位（user_profile.region_code）。POST：保存定位到数据库。"""
+    user_id = _user_id_from_request(request)
+    if not user_id:
+        return Response(_result(401, "请先登录"), status=status.HTTP_401_UNAUTHORIZED)
+    from django.db import connection
+    if request.method == "GET":
+        try:
+            with connection.cursor() as c:
+                c.execute(
+                    "SELECT region_code FROM user_profile WHERE user_id = %s",
+                    [user_id],
+                )
+                row = c.fetchone()
+            region = (row[0] or "").strip() if row and row[0] else None
+        except Exception:
+            region = None
+        return Response(_result(data={"locationCode": region, "location": region}))
+    # POST
+    loc = (
+        request.data.get("locationCode")
+        or request.data.get("location")
+        or request.data.get("locationName")
+        or ""
+    )
+    loc = (str(loc).strip() or "")[:32]
+    try:
+        with connection.cursor() as c:
+            c.execute(
+                """
+                INSERT INTO user_profile (user_id, region_code, created_at, updated_at)
+                VALUES (%s, %s, NOW(), NOW())
+                ON DUPLICATE KEY UPDATE region_code = %s, updated_at = NOW()
+                """,
+                [user_id, loc or None, loc or None],
+            )
+    except Exception:
+        try:
+            with connection.cursor() as c:
+                c.execute("SELECT 1 FROM user_profile WHERE user_id = %s", [user_id])
+                if c.fetchone():
+                    c.execute(
+                        "UPDATE user_profile SET region_code = %s, updated_at = NOW() WHERE user_id = %s",
+                        [loc or None, user_id],
+                    )
+                else:
+                    c.execute(
+                        "INSERT INTO user_profile (user_id, region_code, created_at, updated_at) VALUES (%s, %s, NOW(), NOW())",
+                        [user_id, loc or None],
+                    )
+        except Exception:
+            pass
+    return Response(_result(data={"locationCode": loc or None}))
+
+
 def _upsert_user_profile(user_id, intro=None, birth_date=None, birth_time=None):
     """插入或更新 user_profile 的 intro、birth_date、birth_time。None 表示保留原值"""
     from django.db import connection

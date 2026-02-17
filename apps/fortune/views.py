@@ -690,7 +690,7 @@ def _age_from_date(birth_date):
 def fate_match(request):
     """
     缘分匹配（合并时辰匹配 + 喜属性匹配）：返回同年同月同日生或喜用神相同的用户。
-    筛选参数：gender（1男 2女）、age_min、age_max、zodiac（生肖，如 龙，多个用逗号 龙,兔）。
+    筛选参数：gender（1男 2女）、age_min、age_max、zodiac（生肖）、region（地区，如 广东 深圳，仅匹配同省/同城）。
     """
     import json as _json
     user_id = _user_id_from_request(request)
@@ -732,6 +732,8 @@ def fate_match(request):
             z = z.strip()
             if z and z in ZODIAC_LIST:
                 zodiac_filter.append(z)
+
+    region_filter = (request.GET.get("region") or request.GET.get("location_code") or "").strip()[:32]
 
     candidate_ids = set()
     match_by_birth = set()
@@ -796,7 +798,7 @@ def fate_match(request):
         with connection.cursor() as c:
             c.execute(
                 """
-                SELECT u.id, u.nickname, u.avatar_url, u.gender, up.birth_date, up.birth_time, up.intro, up.xiyongshen
+                SELECT u.id, u.nickname, u.avatar_url, u.gender, up.birth_date, up.birth_time, up.intro, up.xiyongshen, up.region_code
                 FROM user u
                 INNER JOIN user_profile up ON up.user_id = u.id
                 WHERE u.id IN ({})
@@ -822,10 +824,19 @@ def fate_match(request):
             xy = {}
         other_xi = xy.get("喜神") or ""
         other_yong = xy.get("用神") or ""
+        other_region = (str(r[8]).strip() if len(r) > 8 and r[8] else None) or ""
 
         age = _age_from_date(bd)
         zodiac = _zodiac_from_date(bd)
 
+        if region_filter:
+            if not other_region:
+                continue
+            parts = [p.strip() for p in region_filter.split() if p.strip()]
+            if not parts:
+                continue
+            if not any(p in other_region for p in parts):
+                continue
         if gender_filter is not None and u_gender != gender_filter:
             continue
         if age_min is not None and (age is None or age < age_min):
