@@ -465,6 +465,57 @@ def _get_user_code(user_id):
 
 @api_view(["GET"])
 @permission_classes([AllowAny])
+def post_search(request):
+    """帖子搜索：按内容、标签模糊匹配"""
+    keyword = (request.GET.get("keyword") or "").strip()[:64]
+    if not keyword:
+        return Response(_result(data={"list": [], "hasMore": False}))
+    page = max(1, int(request.GET.get("page") or 1))
+    page_size = min(30, max(1, int(request.GET.get("page_size") or 20)))
+    user_id = _user_id_from_request(request)
+
+    qs = Post.objects.filter(status=1).filter(
+        Q(content__icontains=keyword) | Q(tags_json__icontains=keyword)
+    ).order_by("-created_at")
+    start = (page - 1) * page_size
+    posts = list(qs[start : start + page_size])
+    if not posts:
+        return Response(_result(data={"list": [], "hasMore": False}))
+
+    user_ids = list({p.user_id for p in posts})
+    users = {u.id: u for u in User.objects.filter(id__in=user_ids)} if user_ids else {}
+    liked_set = set()
+    favorited_set = set()
+    if user_id and posts:
+        post_ids = [p.id for p in posts]
+        liked_set = set(PostLike.objects.filter(user_id=user_id, post_id__in=post_ids).values_list("post_id", flat=True))
+        favorited_set = set(PostFavorite.objects.filter(user_id=user_id, post_id__in=post_ids).values_list("post_id", flat=True))
+
+    all_topic_ids = set()
+    for p in posts:
+        if p.topic_ids_json:
+            try:
+                ids = json.loads(p.topic_ids_json) if isinstance(p.topic_ids_json, str) else p.topic_ids_json
+                all_topic_ids.update(ids)
+            except Exception:
+                pass
+    topics_map = {t.id: {"id": t.id, "name": t.name} for t in Topic.objects.filter(id__in=all_topic_ids)} if all_topic_ids else {}
+    items = []
+    for p in posts:
+        u = users.get(p.user_id)
+        topic_ids = []
+        if p.topic_ids_json:
+            try:
+                topic_ids = json.loads(p.topic_ids_json) if isinstance(p.topic_ids_json, str) else p.topic_ids_json
+            except Exception:
+                pass
+        topic_list = [topics_map[i] for i in topic_ids if i in topics_map]
+        items.append(_post_item(p, u, topic_list, liked=(p.id in liked_set), favorited=(p.id in favorited_set)))
+    return Response(_result(data={"list": items, "hasMore": len(posts) == page_size}))
+
+
+@api_view(["GET"])
+@permission_classes([AllowAny])
 def user_search(request):
     """用户搜索：user_code 精确唯一；nickname 模糊可多结果"""
     keyword = (request.GET.get("keyword") or "").strip()[:32]
@@ -473,11 +524,20 @@ def user_search(request):
     page = max(1, int(request.GET.get("page") or 1))
     page_size = min(30, max(1, int(request.GET.get("page_size") or 20)))
     items = []
-    if keyword.isdigit() and len(keyword) == 8:
-        u = User.objects.filter(status=1, user_code=keyword).first()
-        if u:
-            items = [{"userId": u.id, "userCode": getattr(u, "user_code", None) or _get_user_code(u.id), "nickname": u.nickname or f"用户{u.id}", "avatarUrl": u.avatar_url}]
-    else:
+    if keyword.isdigit():
+        if len(keyword) == 8:
+            u = User.objects.filter(status=1, user_code=keyword).first()
+            if u:
+                items = [{"userId": u.id, "userCode": getattr(u, "user_code", None) or _get_user_code(u.id), "nickname": u.nickname or f"用户{u.id}", "avatarUrl": u.avatar_url}]
+        else:
+            try:
+                uid = int(keyword)
+                u = User.objects.filter(id=uid, status=1).first()
+                if u:
+                    items = [{"userId": u.id, "userCode": getattr(u, "user_code", None) or _get_user_code(u.id), "nickname": u.nickname or f"用户{u.id}", "avatarUrl": u.avatar_url}]
+            except (ValueError, TypeError):
+                pass
+    if not items:
         qs = User.objects.filter(status=1).filter(Q(nickname__icontains=keyword)).order_by("-id")[(page - 1) * page_size : page * page_size]
         items = [{"userId": u.id, "userCode": getattr(u, "user_code", None) or _get_user_code(u.id), "nickname": u.nickname or f"用户{u.id}", "avatarUrl": u.avatar_url} for u in qs]
     return Response(_result(data={"list": items, "hasMore": len(items) == page_size}))
