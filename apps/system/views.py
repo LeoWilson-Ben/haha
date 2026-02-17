@@ -292,8 +292,36 @@ def _get_client_ip(request):
     return request.META.get("HTTP_X_REAL_IP") or request.META.get("REMOTE_ADDR", "")
 
 
+def _fetch_ip_location_antping(ip):
+    """调用 antping.com 接口查询 IP 属地，返回如 湖北省 武汉市 洪山区 中国移动（/ 已替换为空格）"""
+    import json
+    import urllib.parse
+    import urllib.request
+
+    try:
+        url = f"https://antping.com/geek/network-tools-service/ping/getIpAddress?target={urllib.parse.quote(ip)}"
+        req = urllib.request.Request(
+            url,
+            method="GET",
+            headers={
+                "Accept": "application/json, text/plain, */*",
+                "User-Agent": "Mozilla/5.0 (compatible; XuanYu/1.0)",
+                "Referer": "https://antping.com/ip",
+            },
+        )
+        with urllib.request.urlopen(req, timeout=5) as resp:
+            body = json.loads(resp.read().decode())
+        if body.get("code") == 200 and isinstance(body.get("data"), dict):
+            addr = (body["data"].get("address") or "").strip()
+            if addr:
+                return addr.replace("/", " ")
+    except Exception:
+        pass
+    return None
+
+
 def _fetch_ip_location_tool_lu(ip):
-    """调用 tool.lu 接口查询 IP 属地"""
+    """备用：tool.lu 接口"""
     import json
     import urllib.request
     import urllib.parse
@@ -314,7 +342,6 @@ def _fetch_ip_location_tool_lu(ip):
             body = json.loads(resp.read().decode())
         if body.get("status") and isinstance(body.get("text"), dict):
             t = body["text"]
-            # 优先 ip2region（较详细），其次 taobao
             return (t.get("ip2region") or t.get("taobao") or t.get("chunzhen") or "").strip() or None
     except Exception:
         pass
@@ -347,7 +374,9 @@ def get_ip_location_for_request(request):
         return "本地"
     if ip.startswith("192.168.") or ip.startswith("10.") or ip.startswith("172."):
         return "内网"
-    loc = _fetch_ip_location_tool_lu(ip)
+    loc = _fetch_ip_location_antping(ip)
+    if not loc:
+        loc = _fetch_ip_location_tool_lu(ip)
     if not loc:
         loc = _fetch_ip_location_ipapi(ip)
     return loc
@@ -362,7 +391,9 @@ def ip_location(request):
         return Response(_result(data={"ip": ip or "", "location": "本地"}))
     if ip.startswith("192.168.") or ip.startswith("10.") or ip.startswith("172."):
         return Response(_result(data={"ip": ip, "location": "内网"}))
-    location = _fetch_ip_location_tool_lu(ip)
+    location = _fetch_ip_location_antping(ip)
+    if not location:
+        location = _fetch_ip_location_tool_lu(ip)
     if not location:
         location = _fetch_ip_location_ipapi(ip)
     if not location:

@@ -116,25 +116,36 @@ def feed(request):
     user_id = _user_id_from_request(request)
 
     qs = Post.objects.filter(status=1).order_by("-created_at")
-    if tab == "follow" and user_id:
-        # 关注的人发的帖（需 user_follow 表，此处简化为“我发的”）
-        from django.db import connection
+    if tab in ("follow", "following") and user_id:
+        # 关注：只显示当前账号关注的用户发的帖
         try:
-            with connection.cursor() as c:
-                c.execute(
-                    "SELECT target_user_id FROM user_follow WHERE user_id=%s",
-                    [user_id],
-                )
-                ids = [r[0] for r in c.fetchall()]
+            ids = list(
+                UserFollow.objects.filter(user_id=user_id).values_list("target_user_id", flat=True)
+            )
             if ids:
                 qs = qs.filter(user_id__in=ids)
             else:
                 qs = qs.none()
         except Exception:
-            qs = qs.filter(user_id=user_id)
+            qs = qs.none()
     elif tab == "local":
-        # 同城：按 location_code，暂无用户属地，先按最新
-        pass
+        # 同城：显示与当前请求 IP 定位相同的用户发的帖（post.location_code 含 IP 属地中的地区名）
+        loc = get_ip_location_for_request(request)
+        if not loc or loc in ("本地", "内网", "未知"):
+            qs = qs.none()
+        else:
+            parts = [p.strip() for p in loc.replace("|", " ").split() if len(p.strip()) > 1]
+            if parts:
+                match_q = Q(location_code__icontains=parts[0])
+                for p in parts[1:4]:
+                    match_q = match_q | Q(location_code__icontains=p)
+                qs = qs.filter(
+                    Q(location_code__isnull=False)
+                    & ~Q(location_code="")
+                    & match_q
+                )
+            else:
+                qs = qs.none()
     start = (page - 1) * page_size
     posts = list(qs[start : start + page_size])
     user_ids = list({p.user_id for p in posts})
