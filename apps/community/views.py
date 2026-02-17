@@ -116,34 +116,56 @@ def feed(request):
     user_id = _user_id_from_request(request)
 
     qs = Post.objects.filter(status=1).order_by("-created_at")
-    if tab in ("follow", "following") and user_id:
-        # 关注：只显示当前账号关注的用户发的帖
-        try:
-            ids = list(
-                UserFollow.objects.filter(user_id=user_id).values_list("target_user_id", flat=True)
-            )
-            if ids:
-                qs = qs.filter(user_id__in=ids)
-            else:
-                qs = qs.none()
-        except Exception:
+    if tab in ("follow", "following"):
+        # 关注：只显示当前用户关注的人发的帖（未登录则无数据）
+        if not user_id:
             qs = qs.none()
+        else:
+            try:
+                ids = list(
+                    UserFollow.objects.filter(user_id=user_id).values_list("target_user_id", flat=True)
+                )
+                if ids:
+                    qs = qs.filter(user_id__in=ids)
+                else:
+                    qs = qs.none()
+            except Exception:
+                qs = qs.none()
     elif tab == "local":
-        # 同城：显示与当前请求 IP 定位相同的用户发的帖（post.location_code 含 IP 属地中的地区名）
-        loc = get_ip_location_for_request(request)
+        # 同城：只显示与当前用户同定位的人发的帖（先取用户数据库里的 region_code，没有再取 IP 属地）
+        loc = None
+        if user_id:
+            try:
+                with connection.cursor() as c:
+                    c.execute("SELECT region_code FROM user_profile WHERE user_id = %s", [user_id])
+                    row = c.fetchone()
+                    if row and row[0] and str(row[0]).strip():
+                        loc = str(row[0]).strip()
+            except Exception:
+                pass
+        if not loc or loc in ("本地", "内网", "未知"):
+            loc = get_ip_location_for_request(request)
         if not loc or loc in ("本地", "内网", "未知"):
             qs = qs.none()
         else:
             parts = [p.strip() for p in loc.replace("|", " ").split() if len(p.strip()) > 1]
             if parts:
-                match_q = Q(location_code__icontains=parts[0])
-                for p in parts[1:4]:
-                    match_q = match_q | Q(location_code__icontains=p)
-                qs = qs.filter(
-                    Q(location_code__isnull=False)
-                    & ~Q(location_code="")
-                    & match_q
-                )
+                # 筛选发帖作者的 user_profile.region_code 与当前定位有交集的用户
+                try:
+                    with connection.cursor() as c:
+                        placeholders = " OR ".join(["region_code LIKE %s"] * min(len(parts), 4))
+                        params = ["%{}%".format(p) for p in parts[:4]]
+                        c.execute(
+                            "SELECT user_id FROM user_profile WHERE (region_code IS NOT NULL AND region_code != '') AND (" + placeholders + ")",
+                            params,
+                        )
+                        author_ids = [r[0] for r in c.fetchall()]
+                    if author_ids:
+                        qs = qs.filter(user_id__in=author_ids)
+                    else:
+                        qs = qs.none()
+                except Exception:
+                    qs = qs.none()
             else:
                 qs = qs.none()
     start = (page - 1) * page_size
