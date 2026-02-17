@@ -108,6 +108,12 @@ ALIYUN_SMS_TEMPLATE_PARAM_RESET_PASSWORD = os.environ.get(
     "ALIYUN_SMS_TEMPLATE_PARAM_RESET_PASSWORD",
     '{"code":"##code##","min":"5"}',
 )
+# 修改绑定手机专用模板（请求验证码时传 scene=changePhone 时使用）
+ALIYUN_SMS_TEMPLATE_CODE_CHANGE_PHONE = os.environ.get("ALIYUN_SMS_TEMPLATE_CODE_CHANGE_PHONE", "100002")
+ALIYUN_SMS_TEMPLATE_PARAM_CHANGE_PHONE = os.environ.get(
+    "ALIYUN_SMS_TEMPLATE_PARAM_CHANGE_PHONE",
+    '{"code":"##code##","min":"5"}',
+)
 
 # 阿里云 OSS：默认启用，图片/视频全部走 OSS，不再使用本地 media 存储
 ALIYUN_OSS_ENABLED = os.environ.get("ALIYUN_OSS_ENABLED", "1") == "1"

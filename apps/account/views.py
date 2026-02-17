@@ -90,7 +90,8 @@ def health(request):
 @api_view(["POST"])
 @permission_classes([AllowAny])
 def send_code(request):
-    """发送验证码：开发模式固定 123456；否则走阿里云 Dypnsapi 发真实短信。body 可传 scene=resetPassword 使用重置密码模板 100003。"""
+    """发送验证码：开发模式固定 123456；否则走阿里云 Dypnsapi 发真实短信。
+    body 可传 scene=resetPassword 使用重置密码模板 100003；scene=changePhone 使用修改手机模板 100002。"""
     mobile = _normalize_mobile(request.data.get("mobile"))
     if not MOBILE_PATTERN.match(mobile):
         return Response(_result(400, "请输入中国大陆手机号"), status=status.HTTP_400_BAD_REQUEST)
@@ -102,10 +103,12 @@ def send_code(request):
     key = SMS_CODE_PREFIX + mobile
     scene = (request.data.get("scene") or request.data.get("type") or "").strip().lower()
     is_reset_password = scene == "resetpassword"
+    is_change_phone = scene == "changephone"
 
     if dev_mode:
         cache.set(key, code, CODE_TTL)
-        logger.info("【开发】短信验证码 %s -> %s%s", mobile, code, " (重置密码)" if is_reset_password else "")
+        scene_desc = " (重置密码)" if is_reset_password else " (修改手机)" if is_change_phone else ""
+        logger.info("【开发】短信验证码 %s -> %s%s", mobile, code, scene_desc)
         return Response(_result())
 
     from .sms_aliyun import send_sms_verify_code
@@ -113,6 +116,9 @@ def send_code(request):
     if is_reset_password:
         template_code = getattr(settings, "ALIYUN_SMS_TEMPLATE_CODE_RESET_PASSWORD", "100003")
         template_param = getattr(settings, "ALIYUN_SMS_TEMPLATE_PARAM_RESET_PASSWORD", '{"code":"##code##","min":"5"}')
+    elif is_change_phone:
+        template_code = getattr(settings, "ALIYUN_SMS_TEMPLATE_CODE_CHANGE_PHONE", "100002")
+        template_param = getattr(settings, "ALIYUN_SMS_TEMPLATE_PARAM_CHANGE_PHONE", '{"code":"##code##","min":"5"}')
     else:
         template_code = getattr(settings, "ALIYUN_SMS_TEMPLATE_CODE", "100001")
         template_param = getattr(settings, "ALIYUN_SMS_TEMPLATE_PARAM", '{"code":"##code##","min":"5"}')
@@ -333,6 +339,81 @@ def reset_password(request):
     user.password_hash = make_password(new_password)
     user.save(update_fields=["password_hash", "updated_at"])
     return Response(_result(message="密码已重置，请使用新密码登录"))
+
+
+@api_view(["POST"])
+def change_password(request):
+    """已登录用户修改密码：原密码 + 新密码"""
+    user_id = _user_id_from_request(request)
+    if not user_id:
+        return Response(_result(401, "请先登录"), status=status.HTTP_401_UNAUTHORIZED)
+
+    old_password = (request.data.get("oldPassword") or request.data.get("old_password") or "").strip()
+    new_password = (request.data.get("newPassword") or request.data.get("password") or request.data.get("new_password") or "").strip()
+
+    if not old_password:
+        return Response(_result(400, "请输入原密码"), status=status.HTTP_400_BAD_REQUEST)
+    if not new_password or len(new_password) < 6:
+        return Response(_result(400, "新密码至少 6 位"), status=status.HTTP_400_BAD_REQUEST)
+
+    try:
+        user = User.objects.get(id=user_id)
+    except User.DoesNotExist:
+        return Response(_result(404, "用户不存在"), status=status.HTTP_404_NOT_FOUND)
+
+    if not user.password_hash:
+        return Response(_result(400, "您未设置过密码，请使用忘记密码进行设置"), status=status.HTTP_400_BAD_REQUEST)
+    if not check_password(old_password, user.password_hash):
+        return Response(_result(400, "原密码错误"), status=status.HTTP_400_BAD_REQUEST)
+
+    user.password_hash = make_password(new_password)
+    user.save(update_fields=["password_hash", "updated_at"])
+    return Response(_result(message="密码修改成功"))
+
+
+@api_view(["POST"])
+def change_phone(request):
+    """已登录用户修改绑定手机：原手机验证码 + 新手机号 + 新手机验证码"""
+    user_id = _user_id_from_request(request)
+    if not user_id:
+        return Response(_result(401, "请先登录"), status=status.HTTP_401_UNAUTHORIZED)
+
+    old_code = (request.data.get("oldCode") or request.data.get("old_code") or "").strip()
+    new_mobile = _normalize_mobile(request.data.get("newMobile") or request.data.get("new_mobile"))
+    new_code = (request.data.get("newCode") or request.data.get("new_code") or "").strip()
+
+    if not old_code:
+        return Response(_result(400, "请输入原手机验证码"), status=status.HTTP_400_BAD_REQUEST)
+    if not MOBILE_PATTERN.match(new_mobile):
+        return Response(_result(400, "请输入有效的新手机号"), status=status.HTTP_400_BAD_REQUEST)
+    if not new_code:
+        return Response(_result(400, "请输入新手机验证码"), status=status.HTTP_400_BAD_REQUEST)
+
+    try:
+        user = User.objects.get(id=user_id)
+    except User.DoesNotExist:
+        return Response(_result(404, "用户不存在"), status=status.HTTP_404_NOT_FOUND)
+
+    old_mobile = (user.mobile or "").strip()
+    if not old_mobile:
+        return Response(_result(400, "您未绑定手机号"), status=status.HTTP_400_BAD_REQUEST)
+    if old_mobile == new_mobile:
+        return Response(_result(400, "新手机号不能与原手机号相同"), status=status.HTTP_400_BAD_REQUEST)
+
+    ok, err = _verify_sms_code(old_mobile, old_code)
+    if not ok:
+        return Response(_result(400, "原手机验证码错误或已过期"), status=status.HTTP_400_BAD_REQUEST)
+
+    ok, err = _verify_sms_code(new_mobile, new_code)
+    if not ok:
+        return Response(_result(400, "新手机验证码错误或已过期"), status=status.HTTP_400_BAD_REQUEST)
+
+    if User.objects.filter(mobile=new_mobile).exclude(id=user_id).exists():
+        return Response(_result(400, "该手机号已被其他账号绑定"), status=status.HTTP_400_BAD_REQUEST)
+
+    user.mobile = new_mobile
+    user.save(update_fields=["mobile", "updated_at"])
+    return Response(_result(message="手机号修改成功"))
 
 
 def _user_id_from_request(request):
