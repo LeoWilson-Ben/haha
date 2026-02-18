@@ -9,6 +9,7 @@ urlpatterns = [
     path("post/<int:post_id>", views.post_detail),
     path("post/<int:post_id>/comments", views.comment_list),
     path("post/<int:post_id>/comment", views.add_comment),
+    path("post/<int:post_id>/comment/<int:comment_id>/delete", views.comment_delete),
     path("post/<int:post_id>/like", views.post_like),
     path("post/<int:post_id>/favorite", views.post_favorite),
     path("post/<int:post_id>/share", views.post_share),

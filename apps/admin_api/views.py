@@ -76,6 +76,21 @@ def teacher_apply_list(request):
                 "createdAt": r["created_at"].isoformat() if r.get("created_at") else None,
                 "updatedAt": r["updated_at"].isoformat() if r.get("updated_at") else None,
             })
+        if status_filter == "approved" and items:
+            user_ids = [x["userId"] for x in items]
+            price_map = {}
+            try:
+                with connection.cursor() as c2:
+                    c2.execute(
+                        "SELECT user_id, consult_price FROM user_profile WHERE user_id IN (%s) AND is_master = 1"
+                        % ",".join(["%s"] * len(user_ids)),
+                        user_ids,
+                    )
+                    price_map = {r[0]: float(r[1]) if r[1] is not None else 10.0 for r in c2.fetchall()}
+            except Exception:
+                pass
+            for x in items:
+                x["consultPrice"] = price_map.get(x["userId"], 10.0)
         return Response(_result(data={"list": items, "hasMore": len(items) == page_size}))
     except Exception as e:
         return Response(_result(500, str(e)), status=status.HTTP_500_INTERNAL_SERVER_ERROR)
@@ -105,6 +120,13 @@ def teacher_apply_approve(request, apply_id):
                     "INSERT INTO user_profile (user_id, is_master, created_at, updated_at) VALUES (%s, 1, NOW(), NOW())",
                     [user_id],
                 )
+            try:
+                c.execute(
+                    "UPDATE user_profile SET consult_price = 10 WHERE user_id = %s AND (consult_price IS NULL OR consult_price = 0)",
+                    [user_id],
+                )
+            except Exception:
+                pass
         return Response(_result(data={"message": "已通过"}))
     except Exception as e:
         return Response(_result(500, str(e)), status=status.HTTP_500_INTERNAL_SERVER_ERROR)
@@ -129,6 +151,33 @@ def teacher_apply_reject(request, apply_id):
                 [remark or None, apply_id],
             )
         return Response(_result(data={"message": "已驳回"}))
+    except Exception as e:
+        return Response(_result(500, str(e)), status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+
+
+@api_view(["POST"])
+@admin_api_required
+def teacher_set_consult_price(request, user_id):
+    """设置名师咨询单价（元）。body: { "consultPrice": 10 }"""
+    try:
+        price = request.data.get("consultPrice") if request.data is not None else None
+        if price is None:
+            return Response(_result(400, "缺少 consultPrice"), status=status.HTTP_400_BAD_REQUEST)
+        try:
+            price_val = round(float(price), 2)
+        except (TypeError, ValueError):
+            return Response(_result(400, "consultPrice 无效"), status=status.HTTP_400_BAD_REQUEST)
+        if price_val < 0 or price_val > 99999.99:
+            return Response(_result(400, "单价需在 0～99999.99 之间"), status=status.HTTP_400_BAD_REQUEST)
+        with connection.cursor() as c:
+            c.execute("SELECT 1 FROM user_profile WHERE user_id = %s AND is_master = 1", [user_id])
+            if c.fetchone() is None:
+                return Response(_result(404, "该用户不是名师"), status=status.HTTP_404_NOT_FOUND)
+            c.execute(
+                "UPDATE user_profile SET consult_price = %s, updated_at = NOW() WHERE user_id = %s",
+                [price_val, user_id],
+            )
+        return Response(_result(data={"message": "已更新", "consultPrice": price_val}))
     except Exception as e:
         return Response(_result(500, str(e)), status=status.HTTP_500_INTERNAL_SERVER_ERROR)
 

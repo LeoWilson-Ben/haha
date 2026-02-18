@@ -348,6 +348,27 @@ def add_comment(request, post_id):
 
 @api_view(["POST"])
 @permission_classes([AllowAny])
+def comment_delete(request, post_id, comment_id):
+    """删除评论：仅评论作者或帖子作者可删"""
+    user_id = _user_id_from_request(request)
+    if not user_id:
+        return Response(_result(400, "请先登录"), status=status.HTTP_400_BAD_REQUEST)
+    c = Comment.objects.filter(id=comment_id, post_id=post_id).first()
+    if not c:
+        return Response(_result(404, "评论不存在"), status=status.HTTP_404_NOT_FOUND)
+    p = Post.objects.filter(id=post_id).first()
+    if not p:
+        return Response(_result(404, "帖子不存在"), status=status.HTTP_404_NOT_FOUND)
+    if c.user_id != user_id and p.user_id != user_id:
+        return Response(_result(403, "无权删除该评论"), status=status.HTTP_403_FORBIDDEN)
+    c.status = 0
+    c.save(update_fields=["status"])
+    Post.objects.filter(id=post_id).update(comment_count=F("comment_count") - 1)
+    return Response(_result(data={"message": "已删除"}))
+
+
+@api_view(["POST"])
+@permission_classes([AllowAny])
 def post_like(request, post_id):
     """点赞/取消点赞（post_like 为联合主键表无 id，用 raw SQL 做存在判断与增删）"""
     user_id = _user_id_from_request(request)
@@ -793,7 +814,7 @@ def masters_list(request):
         with connection.cursor() as c:
             c.execute(
                 """
-                SELECT u.id, u.nickname, u.avatar_url, up.intro
+                SELECT u.id, u.nickname, u.avatar_url, up.intro, COALESCE(up.consult_price, 10)
                 FROM user u
                 INNER JOIN user_profile up ON up.user_id = u.id
                 WHERE u.status = 1 AND up.is_master = 1
@@ -806,7 +827,7 @@ def masters_list(request):
         try:
             with connection.cursor() as c:
                 c.execute(
-                    "SELECT u.id, u.nickname, u.avatar_url FROM user u "
+                    "SELECT u.id, u.nickname, u.avatar_url, up.intro FROM user u "
                     "INNER JOIN user_profile up ON up.user_id = u.id "
                     "WHERE u.status = 1 AND up.is_master = 1 ORDER BY u.id DESC LIMIT 50"
                 )
@@ -816,12 +837,14 @@ def masters_list(request):
     items = []
     for r in rows:
         uid = r[0]
+        consult_price = float(r[4]) if len(r) > 4 else 10.0
         items.append({
             "userId": uid,
             "userCode": _get_user_code(uid),
             "nickname": r[1] or f"名师{uid}",
             "avatarUrl": r[2] if len(r) > 2 else None,
             "intro": r[3] if len(r) > 3 else "认证名师",
+            "consultPrice": round(consult_price, 2),
         })
     return Response(_result(data={"list": items}))
 

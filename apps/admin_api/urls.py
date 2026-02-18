@@ -7,6 +7,7 @@ urlpatterns = [
     path("teacher-applies", views.teacher_apply_list),
     path("teacher-applies/<int:apply_id>/approve", views.teacher_apply_approve),
     path("teacher-applies/<int:apply_id>/reject", views.teacher_apply_reject),
+    path("teachers/<int:user_id>/consult-price", views.teacher_set_consult_price),
     path("posts", views.post_list),
     path("posts/<int:post_id>/status", views.post_set_status),
     path("reports", views.report_list),

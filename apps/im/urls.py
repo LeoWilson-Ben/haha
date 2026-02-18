@@ -4,6 +4,7 @@ from . import views
 urlpatterns = [
     path("conversations", views.conversation_list),
     path("conversation/single", views.get_or_create_single),
+    path("conversation/single-with-master", views.get_or_create_single_with_master),
     path("conversation/group", views.create_group),
     path("conversation/<int:conversation_id>/messages", views.message_list),
     path("conversation/<int:conversation_id>/message", views.send_message),

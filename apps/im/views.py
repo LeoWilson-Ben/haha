@@ -1,6 +1,8 @@
 """
-自研 IM：会话列表、单聊、群聊、消息收发、聊天申请、可加入群聊
+自研 IM：会话列表、单聊、群聊、消息收发、聊天申请、可加入群聊、名师咨询付费
 """
+import uuid
+from decimal import Decimal
 from django.db import connection
 from django.db.models import Max, Q
 from rest_framework import status
@@ -8,7 +10,7 @@ from rest_framework.decorators import api_view, permission_classes
 from rest_framework.permissions import AllowAny
 from rest_framework.response import Response
 
-from apps.account.models import User
+from apps.account.models import User, UserWallet, WalletLog
 from apps.account.session_store import get_user_id_by_token
 from .models import Conversation, ConversationMember, Message, ChatApply, ImGroup
 
@@ -137,6 +139,101 @@ def get_or_create_single(request):
     u = User.objects.filter(id=target_id).first()
     title = getattr(u, "nickname", None) or f"用户{target_id}"
     return Response(_result(data={"conversationId": c.id, "type": "single", "title": title}))
+
+
+@api_view(["POST"])
+@permission_classes([AllowAny])
+def get_or_create_single_with_master(request):
+    """名师咨询：付费后获取或创建与名师的单聊。body: { "targetUserId": 123 }。若已有会话则直接返回不扣费。"""
+    user_id = _user_id_from_request(request)
+    if not user_id:
+        return Response(_result(401, "请先登录"), status=status.HTTP_401_UNAUTHORIZED)
+    target_id = request.data.get("targetUserId")
+    if not target_id:
+        return Response(_result(400, "缺少对方用户ID"), status=status.HTTP_400_BAD_REQUEST)
+    try:
+        target_id = int(target_id)
+    except (TypeError, ValueError):
+        return Response(_result(400, "用户ID无效"), status=status.HTTP_400_BAD_REQUEST)
+    if target_id == user_id:
+        return Response(_result(400, "不能与自己聊天"), status=status.HTTP_400_BAD_REQUEST)
+
+    try:
+        with connection.cursor() as c:
+            c.execute(
+                "SELECT COALESCE(up.consult_price, 10), u.nickname FROM user_profile up "
+                "JOIN user u ON u.id = up.user_id WHERE up.user_id = %s AND up.is_master = 1 AND u.status = 1",
+                [target_id],
+            )
+            row = c.fetchone()
+    except Exception:
+        with connection.cursor() as c:
+            c.execute(
+                "SELECT u.nickname FROM user u JOIN user_profile up ON up.user_id = u.id "
+                "WHERE up.user_id = %s AND up.is_master = 1 AND u.status = 1",
+                [target_id],
+            )
+            row = c.fetchone()
+            row = (10.0, row[0]) if row else None
+    if not row:
+        return Response(_result(404, "该用户不是名师或已禁用"), status=status.HTTP_404_NOT_FOUND)
+    try:
+        consult_price = float(row[0]) if row[0] is not None else 10.0
+    except (TypeError, ValueError):
+        consult_price = 10.0
+    master_nickname = (row[1] or "").strip() if len(row) > 1 else f"名师{target_id}"
+    if not master_nickname:
+        master_nickname = f"名师{target_id}"
+    if consult_price <= 0:
+        consult_price = 10.0
+
+    my_convs = set(
+        ConversationMember.objects.filter(user_id=user_id).values_list("conversation_id", flat=True)
+    )
+    target_convs = set(
+        ConversationMember.objects.filter(user_id=target_id).values_list("conversation_id", flat=True)
+    )
+    common = my_convs & target_convs
+    for cid in common:
+        conv = Conversation.objects.filter(id=cid, type="single").first()
+        if conv:
+            u = User.objects.filter(id=target_id).first()
+            title = getattr(u, "nickname", None) or master_nickname
+            return Response(_result(data={"conversationId": conv.id, "type": "single", "title": title}))
+
+    with connection.cursor() as cur:
+        cur.execute(
+            "INSERT IGNORE INTO user_wallet (user_id, balance, frozen_amount, version) VALUES (%s, 0, 0, 0)",
+            [user_id],
+        )
+        cur.execute(
+            "SELECT balance, version FROM user_wallet WHERE user_id = %s FOR UPDATE",
+            [user_id],
+        )
+        row = cur.fetchone()
+    if not row:
+        return Response(_result(500, "钱包异常"), status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+    balance, version = float(row[0]), row[1]
+    if balance < consult_price:
+        return Response(_result(400, "余额不足，请先充值"), status=status.HTTP_400_BAD_REQUEST)
+
+    order_no = "CONSULT_" + uuid.uuid4().hex[:16]
+    with connection.cursor() as cur:
+        cur.execute(
+            "UPDATE user_wallet SET balance = balance - %s, version = version + 1, updated_at = NOW() "
+            "WHERE user_id = %s AND version = %s",
+            [Decimal(str(consult_price)), user_id, version],
+        )
+        if cur.rowcount != 1:
+            return Response(_result(400, "余额不足或请重试"), status=status.HTTP_400_BAD_REQUEST)
+        cur.execute(
+            "INSERT INTO wallet_log (user_id, type, amount, order_no, remark) VALUES (%s, 'consult', %s, %s, %s)",
+            [user_id, Decimal(-consult_price), order_no, f"名师咨询-{master_nickname}"[:255]],
+        )
+    conv, _ = _get_or_create_single_bulk(user_id, target_id)
+    u = User.objects.filter(id=target_id).first()
+    title = getattr(u, "nickname", None) or master_nickname
+    return Response(_result(data={"conversationId": conv.id, "type": "single", "title": title}))
 
 
 @api_view(["POST"])
