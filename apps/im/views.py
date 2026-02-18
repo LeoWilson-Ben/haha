@@ -244,6 +244,8 @@ def send_message(request, conversation_id):
         return Response(_result(400, "消息内容不能为空"), status=status.HTTP_400_BAD_REQUEST)
     if msg_type == "image" and not content:
         return Response(_result(400, "图片地址不能为空"), status=status.HTTP_400_BAD_REQUEST)
+    if msg_type == "post" and not content:
+        return Response(_result(400, "帖子信息不能为空"), status=status.HTTP_400_BAD_REQUEST)
 
     msg = Message.objects.create(
         conversation_id=conversation_id,
