@@ -626,6 +626,41 @@ def constitution_test(request):
         )
 
 
+def _should_generate_image(msg):
+    """检测用户是否请求生成图片"""
+    if not msg or len(msg.strip()) < 2:
+        return False
+    keywords = ("画", "生成图", "帮我画", "画一张", "生成一张", "画一幅", "生成一幅", "给一张图", "配图")
+    return any(k in msg for k in keywords)
+
+
+def _generate_image(user_prompt, llm_reply):
+    """
+    调用通义万相生成图片，返回图片 URL 或 None。
+    使用用户描述 + AI 回复提炼为生图提示词。
+    """
+    try:
+        from dashscope import ImageSynthesis
+
+        prompt = (llm_reply or user_prompt)[:500]
+        if len(prompt) > 200:
+            prompt = prompt[:200] + "，中国风，传统美学"
+
+        rsp = ImageSynthesis.call(
+            api_key=os.getenv("DASHSCOPE_API_KEY", "sk-0c014d6601794c9dbb248ea6892dcd55"),
+            model="wanx-v1",
+            prompt=prompt,
+            n=1,
+            size="1024*1024",
+            style="<auto>",
+        )
+        if rsp and rsp.status_code == 200 and rsp.output and rsp.output.results:
+            return rsp.output.results[0].url
+    except Exception as e:
+        logger.exception("AI 生图失败: %s", e)
+    return None
+
+
 def _get_ai_chat_messages(session_id):
     """从 DB 加载会话的历史消息，供 LLM 使用。"""
     messages = []
@@ -757,7 +792,11 @@ def ai_master_chat(request):
 
     history = _get_ai_chat_messages(session_id)
     llm_messages = [
-        {"role": "system", "content": "你是传统文化名师，精通八字命理、风水、国学等，用专业且亲和的语气为用户解答。根据对话历史理解上下文，回复控制在 300 字以内。"},
+        {"role": "system", "content": """你是传统文化名师，精通八字命理、风水、国学等。请用自然、亲切、口语化的方式与用户交流，像老朋友聊天一样，避免过于正式或教科书式的表述。
+- 语气温和、有温度，适当使用口语表达
+- 避免「综上所述」「首先其次」等僵硬结构
+- 可适当使用比喻、举例，让内容更生动易懂
+- 根据对话历史理解上下文，回复控制在 300 字以内"""},
     ]
     for h in history:
         llm_messages.append({"role": h["role"], "content": h["content"]})
@@ -775,6 +814,12 @@ def ai_master_chat(request):
         )
         content = (completion.choices[0].message.content if completion.choices else "").strip() or "抱歉，暂未生成回复，请稍后再试。"
 
+        image_url = None
+        if _should_generate_image(msg):
+            image_url = _generate_image(msg, content)
+            if image_url:
+                content = (content or "已根据您的描述生成图片。") + f"\n\n![生成图片]({image_url})"
+
         try:
             with connection.cursor() as c:
                 c.execute(
@@ -784,7 +829,10 @@ def ai_master_chat(request):
         except Exception:
             pass
 
-        return Response(_result(data={"content": content, "sessionId": session_id}))
+        result_data = {"content": content, "sessionId": session_id}
+        if image_url:
+            result_data["imageUrl"] = image_url
+        return Response(_result(data=result_data))
     except Exception as e:
         logger.exception("AI名师对话失败")
         return Response(
