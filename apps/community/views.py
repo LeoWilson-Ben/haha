@@ -543,34 +543,69 @@ def user_search(request):
     return Response(_result(data={"list": items, "hasMore": len(items) == page_size}))
 
 
-def _get_user_profile_ext(user_id):
-    """从 user_profile 表读取 intro、birth_date、birth_time、region_code"""
+def _get_user_profile_ext(user_id, apply_privacy=True):
+    """从 user_profile 表读取 intro、birth_date、birth_time、region_code，可选按隐私设置过滤（供他人查看时用）"""
+    row = None
     try:
         with connection.cursor() as c:
             c.execute(
-                "SELECT intro, birth_date, birth_time, region_code FROM user_profile WHERE user_id = %s",
+                """SELECT intro, birth_date, birth_time, region_code,
+                   COALESCE(show_intro, 1), COALESCE(show_location, 1), COALESCE(show_age, 1), COALESCE(show_birth_date, 0)
+                   FROM user_profile WHERE user_id = %s""",
                 [user_id],
             )
             row = c.fetchone()
     except Exception:
         try:
             with connection.cursor() as c:
-                c.execute("SELECT intro, birth_date, birth_time FROM user_profile WHERE user_id = %s", [user_id])
+                c.execute(
+                    "SELECT intro, birth_date, birth_time, region_code FROM user_profile WHERE user_id = %s",
+                    [user_id],
+                )
                 row = c.fetchone()
         except Exception:
-            with connection.cursor() as c:
-                c.execute("SELECT intro, birth_date FROM user_profile WHERE user_id = %s", [user_id])
-                row = c.fetchone()
+            try:
+                with connection.cursor() as c:
+                    c.execute("SELECT intro, birth_date, birth_time FROM user_profile WHERE user_id = %s", [user_id])
+                    row = c.fetchone()
+            except Exception:
+                row = None
+        if row:
+            row = list(row) if not isinstance(row, (list, tuple)) else list(row)
+            row = (row + [1, 1, 1, 0])[:8]
     if row:
         birth_time = str(row[2]).strip() if len(row) > 2 and row[2] else None
         region = (str(row[3]).strip() if len(row) > 3 and row[3] else None) or None
+        show_intro = int(row[4]) if len(row) > 4 and row[4] is not None else 1
+        show_location = int(row[5]) if len(row) > 5 and row[5] is not None else 1
+        show_age = int(row[6]) if len(row) > 6 and row[6] is not None else 1
+        show_birth_date = int(row[7]) if len(row) > 7 and row[7] is not None else 0
+        birth_date_val = row[1].strftime("%Y-%m-%d") if row[1] and hasattr(row[1], "strftime") else (str(row[1])[:10] if row[1] else None)
+        age_val = None
+        if birth_date_val and show_age:
+            try:
+                from datetime import date
+                bd = row[1] if hasattr(row[1], "year") else __import__("datetime").datetime.strptime(str(birth_date_val)[:10], "%Y-%m-%d").date()
+                today = date.today()
+                age_val = today.year - bd.year - ((today.month, today.day) < (bd.month, bd.day))
+            except Exception:
+                pass
+        if apply_privacy:
+            return {
+                "intro": (row[0] or "") if show_intro else "",
+                "birthDate": birth_date_val if show_birth_date else None,
+                "birthTime": birth_time if show_birth_date else None,
+                "regionCode": region if show_location else None,
+                "age": age_val,
+            }
         return {
             "intro": row[0] or "",
-            "birthDate": row[1].strftime("%Y-%m-%d") if row[1] else None,
+            "birthDate": birth_date_val,
             "birthTime": birth_time,
             "regionCode": region,
+            "age": age_val,
         }
-    return {"intro": "", "birthDate": None, "birthTime": None, "regionCode": None}
+    return {"intro": "", "birthDate": None, "birthTime": None, "regionCode": None, "age": None}
 
 
 @api_view(["GET"])
@@ -593,7 +628,7 @@ def user_profile(request, user_id):
         return Response(_result(404, "用户不存在"), status=status.HTTP_404_NOT_FOUND)
     current_id = _user_id_from_request(request)
     following = bool(current_id and UserFollow.objects.filter(user_id=current_id, target_user_id=user_id).exists())
-    prof = _get_user_profile_ext(user_id)
+    prof = _get_user_profile_ext(user_id, apply_privacy=True)
     follow_count = UserFollow.objects.filter(user_id=user_id).count()
     follower_count = UserFollow.objects.filter(target_user_id=user_id).count()
     post_count = Post.objects.filter(user_id=user_id, status=1).count()
@@ -606,9 +641,10 @@ def user_profile(request, user_id):
         "gender": getattr(u, "gender", None),
         "following": following,
         "intro": prof["intro"],
-        "birthDate": prof["birthDate"],
+        "birthDate": prof.get("birthDate"),
         "birthTime": prof.get("birthTime"),
         "locationCode": prof.get("regionCode"),
+        "age": prof.get("age"),
         "followCount": follow_count,
         "followerCount": follower_count,
         "postCount": post_count,

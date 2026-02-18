@@ -38,6 +38,12 @@ mysql -u root -p lingshu < sql/migrate_voice_room.sql
 
 并在 `server/Agora.txt` 中配置 APPID 与证书（或设置环境变量 `AGORA_APP_ID`、`AGORA_APP_CERTIFICATE`）。
 
+**隐私设置**（个人信息展示控制）：
+
+```bash
+mysql -u root -p lingshu < sql/migrate_privacy_settings.sql
+```
+
 ## 启动
 
 **本机访问**：

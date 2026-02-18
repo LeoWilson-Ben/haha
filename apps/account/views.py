@@ -637,6 +637,87 @@ def update_profile(request):
     }))
 
 
+@api_view(["GET", "PATCH"])
+def privacy_settings(request):
+    """GET：获取个人信息展示隐私设置；PATCH：更新。showIntro/showLocation/showAge/showBirthDate 0否1是"""
+    user_id = _user_id_from_request(request)
+    if not user_id:
+        return Response(_result(401, "请先登录"), status=status.HTTP_401_UNAUTHORIZED)
+    from django.db import connection
+
+    def _get_privacy(user_id):
+        try:
+            with connection.cursor() as c:
+                c.execute(
+                    """SELECT COALESCE(show_intro, 1), COALESCE(show_location, 1),
+                       COALESCE(show_age, 1), COALESCE(show_birth_date, 0)
+                       FROM user_profile WHERE user_id = %s""",
+                    [user_id],
+                )
+                row = c.fetchone()
+        except Exception:
+            return {"showIntro": 1, "showLocation": 1, "showAge": 1, "showBirthDate": 0}
+        if row:
+            return {
+                "showIntro": 1 if (len(row) > 0 and row[0]) else 0,
+                "showLocation": 1 if (len(row) > 1 and row[1]) else 0,
+                "showAge": 1 if (len(row) > 2 and row[2]) else 0,
+                "showBirthDate": 1 if (len(row) > 3 and row[3]) else 0,
+            }
+        return {"showIntro": 1, "showLocation": 1, "showAge": 1, "showBirthDate": 0}
+
+    if request.method == "GET":
+        return Response(_result(data=_get_privacy(user_id)))
+
+    # PATCH
+    show_intro = request.data.get("showIntro")
+    show_location = request.data.get("showLocation")
+    show_age = request.data.get("showAge")
+    show_birth_date = request.data.get("showBirthDate")
+
+    updates = []
+    params = []
+    if show_intro is not None:
+        updates.append("show_intro = %s")
+        params.append(1 if show_intro else 0)
+    if show_location is not None:
+        updates.append("show_location = %s")
+        params.append(1 if show_location else 0)
+    if show_age is not None:
+        updates.append("show_age = %s")
+        params.append(1 if show_age else 0)
+    if show_birth_date is not None:
+        updates.append("show_birth_date = %s")
+        params.append(1 if show_birth_date else 0)
+
+    if updates:
+        try:
+            with connection.cursor() as c:
+                c.execute(
+                    "SELECT 1 FROM user_profile WHERE user_id = %s",
+                    [user_id],
+                )
+                if c.fetchone():
+                    params.append(user_id)
+                    c.execute(
+                        f"UPDATE user_profile SET {', '.join(updates)}, updated_at = NOW() WHERE user_id = %s",
+                        params,
+                    )
+                else:
+                    si = 1 if (show_intro is None or show_intro) else 0
+                    sl = 1 if show_location is None or show_location else 0
+                    sa = 1 if show_age is None or show_age else 0
+                    sb = 1 if show_birth_date else 0
+                    c.execute(
+                        """INSERT INTO user_profile (user_id, show_intro, show_location, show_age, show_birth_date, created_at, updated_at)
+                           VALUES (%s, %s, %s, %s, %s, NOW(), NOW())""",
+                        [user_id, si, sl, sa, sb],
+                    )
+        except Exception:
+            pass
+    return Response(_result(data=_get_privacy(user_id)))
+
+
 def _ensure_wallet(user_id):
     from django.db import connection
     with connection.cursor() as c:

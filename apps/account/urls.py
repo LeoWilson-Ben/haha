@@ -12,6 +12,7 @@ urlpatterns = [
     path("me", views.me),
     path("location", views.user_location),
     path("updateProfile", views.update_profile),
+    path("privacy", views.privacy_settings),
     path("wallet/balance", views.wallet_balance),
     path("wallet/log", views.wallet_log_list),
     path("orders", views.order_list),
