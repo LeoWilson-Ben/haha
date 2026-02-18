@@ -664,8 +664,12 @@ def _generate_image(user_prompt, llm_reply):
                 "watermark": False,
             },
         }
-        rsp = requests.post(url, json=payload, headers=headers, timeout=120)
-        data = rsp.json()
+        rsp = requests.post(url, json=payload, headers=headers, timeout=45)
+        try:
+            data = rsp.json()
+        except Exception:
+            logger.warning("wan2.6-t2i 返回非 JSON: status=%s", rsp.status_code)
+            return None
         if rsp.status_code == 200 and data.get("output"):
             choices = data["output"].get("choices") or []
             if choices:
@@ -676,6 +680,8 @@ def _generate_image(user_prompt, llm_reply):
             results = data["output"].get("results") or []
             if results and results[0].get("url"):
                 return results[0]["url"]
+        if rsp.status_code != 200:
+            logger.warning("wan2.6-t2i 返回错误: status=%s, body=%s", rsp.status_code, data)
     except Exception as e:
         logger.exception("AI 生图失败: %s", e)
     return None
@@ -836,9 +842,12 @@ def ai_master_chat(request):
 
         image_url = None
         if _should_generate_image(msg):
-            image_url = _generate_image(msg, content)
-            if image_url:
-                content = (content or "已根据您的描述生成图片。") + f"\n\n![生成图片]({image_url})"
+            try:
+                image_url = _generate_image(msg, content)
+                if image_url:
+                    content = (content or "已根据您的描述生成图片。") + f"\n\n![生成图片]({image_url})"
+            except Exception as img_err:
+                logger.warning("AI 生图失败，仍返回文字回复: %s", img_err)
 
         try:
             with connection.cursor() as c:
