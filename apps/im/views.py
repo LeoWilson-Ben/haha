@@ -27,6 +27,17 @@ def _user_id_from_request(request):
     return None
 
 
+def _conversation_last_message_preview(last_msg):
+    """会话列表最后一条消息的展示文案，避免帖子消息显示后端/字典原始数据"""
+    if not last_msg or not last_msg.content_encrypted:
+        return ""
+    if last_msg.type == "image":
+        return "[图片]"
+    if last_msg.type == "post":
+        return "[帖子]"
+    return last_msg.content_encrypted[:50]
+
+
 @api_view(["GET"])
 @permission_classes([AllowAny])
 def conversation_list(request):
@@ -84,7 +95,7 @@ def conversation_list(request):
             "conversationId": c.id,
             "type": c.type,
             "title": peer_name,
-            "lastMessage": "[图片]" if last_msg and last_msg.type == "image" else (last_msg.content_encrypted[:50] if last_msg and last_msg.content_encrypted else ""),
+            "lastMessage": _conversation_last_message_preview(last_msg),
             "lastMessageType": last_msg.type if last_msg else None,
             "lastMessageAt": last_msg.created_at.isoformat() if last_msg and last_msg.created_at else None,
             "unreadCount": unread,
@@ -838,7 +849,7 @@ def master_consult_list(request):
             "type": "single",
             "title": peer_name,
             "peerUserId": peer_id,
-            "lastMessage": "[图片]" if last_msg and last_msg.type == "image" else (last_msg.content_encrypted[:50] if last_msg and last_msg.content_encrypted else ""),
+            "lastMessage": _conversation_last_message_preview(last_msg),
             "lastMessageAt": last_msg.created_at.isoformat() if last_msg and last_msg.created_at else None,
             "unreadCount": unread,
         })
