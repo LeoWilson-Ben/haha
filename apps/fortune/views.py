@@ -258,6 +258,97 @@ def today_fortune(request):
         )
 
 
+HEALTH_CACHE_PREFIX = "fortune:health:"
+HEALTH_CACHE_TTL = 86400 * 2  # 48 小时
+
+
+def _get_user_constitution(user_id):
+    """获取用户中医体质，未存储时返回 None（用平和代替）"""
+    try:
+        with connection.cursor() as c:
+            c.execute(
+                "SELECT constitution FROM user_profile WHERE user_id = %s",
+                [user_id],
+            )
+            row = c.fetchone()
+            if row and row[0]:
+                return str(row[0]).strip()
+    except Exception:
+        pass
+    return None
+
+
+@api_view(["GET"])
+@permission_classes([AllowAny])
+def daily_health(request):
+    """
+    今日养生：根据用户中医体质 + 24 节气，推荐当日适宜饮用、食用的内容。
+    需登录。体质未填写时按「平和」处理。每天每用户只生成一次，结果缓存于 Redis。
+    """
+    user_id = _user_id_from_request(request)
+    if not user_id:
+        return Response(_result(401, "请先登录"), status=status.HTTP_401_UNAUTHORIZED)
+
+    constitution = _get_user_constitution(user_id) or "平和"
+    today = date.today()
+    today_str = today.strftime("%Y-%m-%d")
+    solar_term = ""
+    try:
+        from apps.fortune.solar_term import get_solar_term
+        solar_term = get_solar_term(today)
+    except Exception:
+        solar_term = "立春"  # fallback
+
+    cache_key = f"{HEALTH_CACHE_PREFIX}{user_id}:{today_str}"
+    cached = cache.get(cache_key)
+    if cached is not None:
+        return Response(_result(data={
+            "content": cached,
+            "date": today_str,
+            "constitution": constitution,
+            "solarTerm": solar_term,
+        }))
+
+    today_fmt = today.strftime("%Y年%m月%d日")
+    prompt = f"""你是一位中医养生专家。请根据以下信息，为用户推荐今日（{today_fmt}）适宜饮用、食用的内容。
+
+【用户体质】{constitution}
+【当前节气】{solar_term}
+
+请用简洁、实用的语气，输出 1. 宜饮（茶饮、汤水等） 2. 宜食（食材、菜品建议） 3. 养生小贴士，每项 1-2 条，控制在 200 字以内。用 Markdown 格式输出，不要标题编号外的多余格式。"""
+    try:
+        from openai import OpenAI
+        client = OpenAI(
+            api_key=os.getenv("DASHSCOPE_API_KEY", "sk-0c014d6601794c9dbb248ea6892dcd55"),
+            base_url="https://dashscope.aliyuncs.com/compatible-mode/v1",
+        )
+        completion = client.chat.completions.create(
+            model="qwen-plus",
+            messages=[
+                {"role": "system", "content": "你是中医养生专家，用简洁亲切的语气给出饮食建议。"},
+                {"role": "user", "content": prompt},
+            ],
+            timeout=60.0,
+        )
+        content = (completion.choices[0].message.content if completion.choices else "").strip() or f"今日{solar_term}，宜清淡饮食、规律作息。"
+        cache.set(cache_key, content, timeout=HEALTH_CACHE_TTL)
+        return Response(_result(data={
+            "content": content,
+            "date": today_str,
+            "constitution": constitution,
+            "solarTerm": solar_term,
+        }))
+    except Exception as e:
+        logger.exception("今日养生生成失败")
+        fallback = f"今日{solar_term}，宜清淡饮食、规律作息。体质为{constitution}者，可适当食温补之品。"
+        return Response(_result(data={
+            "content": fallback,
+            "date": today_str,
+            "constitution": constitution,
+            "solarTerm": solar_term,
+        }))
+
+
 @api_view(["POST"])
 @permission_classes([AllowAny])
 def fengshui_analyze(request):
@@ -321,6 +412,65 @@ def fengshui_analyze(request):
         logger.exception("风水分析失败")
         return Response(
             _result(500, f"风水分析失败：{str(e)}"),
+            status=status.HTTP_500_INTERNAL_SERVER_ERROR,
+        )
+
+
+@api_view(["POST"])
+@permission_classes([AllowAny])
+def fengshui_item_analyze(request):
+    """
+    八宫方位物品吉凶：根据方位 + 放置物品名称，返回吉凶分析。
+    body: { "direction": "乾", "itemName": "鱼缸" }
+    """
+    user_id = _user_id_from_request(request)
+    if not user_id:
+        return Response(_result(401, "请先登录"), status=status.HTTP_401_UNAUTHORIZED)
+
+    direction = (request.data.get("direction") or "").strip()
+    item_name = (request.data.get("itemName") or "").strip()
+    if not direction:
+        return Response(_result(400, "请选择方位"), status=status.HTTP_400_BAD_REQUEST)
+    if not item_name:
+        return Response(_result(400, "请输入物品名称"), status=status.HTTP_400_BAD_REQUEST)
+
+    # 八宫方位：乾坎艮震巽离坤兑 或 西北/北/东北/东/东南/南/西南/西
+    valid_directions = ("乾", "坎", "艮", "震", "巽", "离", "坤", "兑",
+                       "西北", "北", "东北", "东", "东南", "南", "西南", "西")
+    if direction not in valid_directions:
+        return Response(_result(400, "无效方位"), status=status.HTTP_400_BAD_REQUEST)
+
+    prompt = f"""你是一位传统文化风水师。用户询问在【{direction}】方位放置【{item_name}】的吉凶。
+
+请简要回答（控制在 100 字以内）：
+1. 吉凶结论（吉/凶/平，或大吉/小吉/平/小凶/大凶）
+2. 简要理由（1-2 句）
+用专业且通俗的语气，直接给出结论。"""
+    try:
+        from openai import OpenAI
+        client = OpenAI(
+            api_key=os.getenv("DASHSCOPE_API_KEY", "sk-0c014d6601794c9dbb248ea6892dcd55"),
+            base_url="https://dashscope.aliyuncs.com/compatible-mode/v1",
+        )
+        completion = client.chat.completions.create(
+            model="qwen-plus",
+            messages=[
+                {"role": "system", "content": "你是传统文化风水师，用简洁专业的口吻回答问题。"},
+                {"role": "user", "content": prompt},
+            ],
+            timeout=30.0,
+        )
+        content = (completion.choices[0].message.content if completion.choices else "").strip() or "宜根据实际格局综合判断。"
+        fortune = "平"
+        if any(x in content for x in ("大凶", "凶", "忌", "不宜")):
+            fortune = "凶"
+        elif any(x in content for x in ("大吉", "吉", "宜", "好")):
+            fortune = "吉"
+        return Response(_result(data={"fortune": fortune, "description": content}))
+    except Exception as e:
+        logger.exception("物品吉凶分析失败")
+        return Response(
+            _result(500, f"分析失败：{str(e)}"),
             status=status.HTTP_500_INTERNAL_SERVER_ERROR,
         )
 
