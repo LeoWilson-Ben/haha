@@ -636,26 +636,46 @@ def _should_generate_image(msg):
 
 def _generate_image(user_prompt, llm_reply):
     """
-    调用通义万相生成图片，返回图片 URL 或 None。
+    调用通义万相 wan2.6-t2i 生成图片，返回图片 URL 或 None。
     使用用户描述 + AI 回复提炼为生图提示词。
     """
     try:
-        from dashscope import ImageSynthesis
+        import requests
 
         prompt = (llm_reply or user_prompt)[:500]
         if len(prompt) > 200:
             prompt = prompt[:200] + "，中国风，传统美学"
 
-        rsp = ImageSynthesis.call(
-            api_key=os.getenv("DASHSCOPE_API_KEY", "sk-0c014d6601794c9dbb248ea6892dcd55"),
-            model="wanx-v1",
-            prompt=prompt,
-            n=1,
-            size="1024*1024",
-            style="<auto>",
-        )
-        if rsp and rsp.status_code == 200 and rsp.output and rsp.output.results:
-            return rsp.output.results[0].url
+        api_key = os.getenv("DASHSCOPE_API_KEY", "sk-0c014d6601794c9dbb248ea6892dcd55")
+        url = "https://dashscope.aliyuncs.com/api/v1/services/aigc/multimodal-generation/generation"
+        headers = {
+            "Content-Type": "application/json",
+            "Authorization": f"Bearer {api_key}",
+        }
+        payload = {
+            "model": "wan2.6-t2i",
+            "input": {
+                "messages": [{"role": "user", "content": [{"text": prompt}]}],
+            },
+            "parameters": {
+                "n": 1,
+                "size": "1024*1024",
+                "prompt_extend": True,
+                "watermark": False,
+            },
+        }
+        rsp = requests.post(url, json=payload, headers=headers, timeout=120)
+        data = rsp.json()
+        if rsp.status_code == 200 and data.get("output"):
+            choices = data["output"].get("choices") or []
+            if choices:
+                content_list = choices[0].get("message", {}).get("content") or []
+                for item in content_list:
+                    if item.get("type") == "image" and item.get("image"):
+                        return item["image"]
+            results = data["output"].get("results") or []
+            if results and results[0].get("url"):
+                return results[0]["url"]
     except Exception as e:
         logger.exception("AI 生图失败: %s", e)
     return None

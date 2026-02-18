@@ -1,5 +1,6 @@
 # 需求：MySQL 8.0 + Redis，连接方式见需求文档末尾
 Django>=5.0,<6
+requests>=2.28
 djangorestframework>=3.14
 django-cors-headers>=4.3
 PyMySQL>=1.1
