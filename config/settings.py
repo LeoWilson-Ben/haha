@@ -21,6 +21,7 @@ INSTALLED_APPS = [
     "apps.community",
     "apps.system",
     "apps.im",
+    "apps.voice_match",
     "apps.admin_api",
 ]
 

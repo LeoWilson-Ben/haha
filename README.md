@@ -30,6 +30,14 @@ python manage.py makemigrations account
 python manage.py migrate
 ```
 
+**语音匹配**（需先建表）：
+
+```bash
+mysql -u root -p lingshu < sql/migrate_voice_room.sql
+```
+
+并在 `server/Agora.txt` 中配置 APPID 与证书（或设置环境变量 `AGORA_APP_ID`、`AGORA_APP_CERTIFICATE`）。
+
 ## 启动
 
 **本机访问**：
@@ -50,6 +58,14 @@ python manage.py runserver 0.0.0.0:8080
 - `POST /api/auth/login` — 登录，body: `{"mobile":"13800138000","code":"123456","deviceId":"xxx"}`
 
 开发模式下发验证码固定为 `123456`。
+
+**语音匹配**（需登录，Bearer Token）：
+
+- `POST /api/voice-match/join` — 加入匹配池，返回 `status`: `waiting` | `matched`（含 `roomId`）| `no_gender` | `minor_mode`
+- `GET /api/voice-match/status` — 轮询匹配结果，返回 `status`: `waiting` | `matched`（含 `roomId`）
+- `POST /api/voice-match/cancel` — 取消匹配
+- `GET /api/voice-room/join?room_id=xxx` — 加入语音房间，返回 `rtcToken`、`channel`、`uid`、`peer`
+- `POST /api/voice-room/leave` — 挂断，body: `{"room_id":"xxx"}`
 
 ## 管理后台 API
 

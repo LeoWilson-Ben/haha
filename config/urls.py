@@ -12,6 +12,8 @@ urlpatterns = [
     path("api/community/", include("apps.community.urls")),
     path("api/config/", include("apps.system.urls")),
     path("api/im/", include("apps.im.urls")),
+    path("api/voice-match/", include("apps.voice_match.urls")),
+    path("api/voice-room/", include("apps.voice_match.room_urls")),
     path("api/admin/", include("apps.admin_api.urls")),
 ]
 if settings.DEBUG and settings.MEDIA_ROOT:
