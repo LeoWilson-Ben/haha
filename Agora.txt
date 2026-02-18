@@ -1,6 +1,0 @@
-# 声网 Agora 配置（用于语音匹配一对一实时通话）
-# APPID：客户端初始化 RTC 需要，已同步到 lib/core/constants/agora_constants.dart
-# 证书：仅服务端使用，用于生成 RTC Token，切勿泄露到客户端或版本库
-
-APPID 04c9bffd0b604a93812f5bc51fe9a7bc
-证书 4b7808bb95464b7db557908187fed6a3
