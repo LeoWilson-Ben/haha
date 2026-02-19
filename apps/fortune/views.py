@@ -36,6 +36,22 @@ def _user_id_from_request(request):
     return None
 
 
+def _get_ai_prompt(key, default="", **replacements):
+    """从 ai_prompt 表读取提示词，若不存在或异常则返回 default。replacements 用于替换 content 中的 {key}。"""
+    try:
+        with connection.cursor() as c:
+            c.execute("SELECT content FROM ai_prompt WHERE `key` = %s", [key])
+            row = c.fetchone()
+        if not row or not (row[0] or "").strip():
+            return default
+        content = (row[0] or "").strip()
+        for k, v in replacements.items():
+            content = content.replace("{" + str(k) + "}", str(v))
+        return content
+    except Exception:
+        return default
+
+
 @api_view(["POST"])
 @permission_classes([AllowAny])
 def bazi_paipan(request):
@@ -230,9 +246,10 @@ def today_fortune(request):
         return Response(_result(data={"content": cached, "birthDate": birth_date}))
 
     today = date.today().strftime("%Y年%m月%d日")
-    prompt = f"""你是一位传统文化命理师。根据以下信息，为用户撰写今日运势（{today}）：
+    default_prompt = f"""你是一位传统文化命理师。根据以下信息，为用户撰写今日运势（{today}）：
 用户出生日期：{birth_date}，出生时辰：{birth_time or '未知'}。
 请用简洁、温馨的语气，从事业、感情、健康、财运等方面给出 2-3 句运势建议，控制在 150 字以内。"""
+    prompt = _get_ai_prompt("daily_fortune", default_prompt, today=today, birth_date=birth_date, birth_time=birth_time or "未知")
     try:
         from openai import OpenAI
         client = OpenAI(
@@ -310,12 +327,13 @@ def daily_health(request):
         }))
 
     today_fmt = today.strftime("%Y年%m月%d日")
-    prompt = f"""你是一位中医养生专家。请根据以下信息，为用户推荐今日（{today_fmt}）适宜饮用、食用的内容。
+    default_prompt = f"""你是一位中医养生专家。请根据以下信息，为用户推荐今日（{today_fmt}）适宜饮用、食用的内容。
 
 【用户体质】{constitution}
 【当前节气】{solar_term}
 
 请用简洁、实用的语气，输出 1. 宜饮（茶饮、汤水等） 2. 宜食（食材、菜品建议） 3. 养生小贴士，每项 1-2 条，控制在 200 字以内。用 Markdown 格式输出，不要标题编号外的多余格式。"""
+    prompt = _get_ai_prompt("daily_health", default_prompt, today_fmt=today_fmt, constitution=constitution, solar_term=solar_term)
     try:
         from openai import OpenAI
         client = OpenAI(
@@ -379,13 +397,14 @@ def fengshui_analyze(request):
         logger.exception("风水分析：读取图片失败")
         return Response(_result(500, "图片处理失败"), status=status.HTTP_500_INTERNAL_SERVER_ERROR)
 
-    prompt = """你是一位传统文化风水师。请仔细观察用户上传的这张房屋/环境图片，从传统风水角度进行分析。
+    default_prompt = """你是一位传统文化风水师。请仔细观察用户上传的这张房屋/环境图片，从传统风水角度进行分析。
 请用 Markdown 格式输出，包含以下小节（使用 ## 二级标题）：
 1. 整体格局与气场
 2. 采光与通风
 3. 布局建议（如有不妥之处可给出改善建议）
 4. 吉凶方位简析
 用简洁、通俗的语言，控制在 300 字以内，给出专业且易懂的风水分析报告。"""
+    prompt = _get_ai_prompt("fengshui_image", default_prompt)
 
     try:
         from openai import OpenAI
@@ -440,12 +459,13 @@ def fengshui_item_analyze(request):
     if direction not in valid_directions:
         return Response(_result(400, "无效方位"), status=status.HTTP_400_BAD_REQUEST)
 
-    prompt = f"""你是一位传统文化风水师。用户询问在【{direction}】方位放置【{item_name}】的吉凶。
+    default_prompt = f"""你是一位传统文化风水师。用户询问在【{direction}】方位放置【{item_name}】的吉凶。
 
 请简要回答（控制在 100 字以内）：
 1. 吉凶结论（吉/凶/平，或大吉/小吉/平/小凶/大凶）
 2. 简要理由（1-2 句）
 用专业且通俗的语气，直接给出结论。"""
+    prompt = _get_ai_prompt("fengshui_item", default_prompt, direction=direction, item_name=item_name)
     try:
         from openai import OpenAI
         client = OpenAI(
@@ -581,7 +601,7 @@ def constitution_test(request):
 
     qa_text = "\n".join(qa_lines) if qa_lines else "（无问卷数据）"
 
-    prompt = f"""你是一位中医体质辨识专家。请根据用户信息、问卷答卷和舌象图片，生成一份体质检测报告。
+    default_prompt = f"""你是一位中医体质辨识专家。请根据用户信息、问卷答卷和舌象图片，生成一份体质检测报告。
 
 【用户信息】
 性别：{gender}，年龄：{age}岁
@@ -596,6 +616,7 @@ def constitution_test(request):
 3. 调养建议（饮食、起居、运动、情志等）
 4. 舌象简要分析
 用专业且通俗的语言，控制在 500 字以内。"""
+    prompt = _get_ai_prompt("constitution_test", default_prompt, gender=gender, age=age, qa_text=qa_text)
 
     try:
         from openai import OpenAI

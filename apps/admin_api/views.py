@@ -1,7 +1,9 @@
 # -*- coding: utf-8 -*-
-"""管理后台 API：名师审核、内容、举报、提现、用户"""
+"""管理后台 API：名师审核、内容、举报、提现、用户、核心数据看板、AI 提示词"""
 import json
-from django.conf import settings
+from datetime import timedelta
+from decimal import Decimal
+
 from django.db import connection
 from django.utils import timezone
 from rest_framework import status
@@ -10,14 +12,206 @@ from rest_framework.response import Response
 
 from .auth import admin_api_required, _result
 from apps.account.models import User, WithdrawApply
-from apps.community.models import Post, Comment, Report
+from apps.community.models import Post, Report
 
 
-# ---------- 仪表盘 ----------
+# ---------- 核心数据看板（替代原仪表盘） ----------
+@api_view(["GET"])
+@admin_api_required
+def core_data_board(request):
+    """
+    核心数据看板：实时数据 DAU/WAU/MAU、新增用户、留存率；
+    业务数据：订单量/交易额、内容发布量、付费转化率；
+    趋势数据：按 period=day|week|month|year 与 start_date/end_date 返回时间序列。
+    """
+    period = (request.GET.get("period") or "day").strip().lower()
+    if period not in ("day", "week", "month", "year"):
+        period = "day"
+    start_date = (request.GET.get("start_date") or "").strip()
+    end_date = (request.GET.get("end_date") or "").strip()
+    now = timezone.now()
+    today = now.date()
+
+    try:
+        with connection.cursor() as c:
+            # 活跃用户：有发帖/订单/钱包流水任一行为的用户（无登录日志时用此近似）
+            def distinct_users_sql(table, dt_col, since):
+                return f"SELECT DISTINCT user_id FROM {table} WHERE {dt_col} >= %s"
+            since_1d = now - timedelta(days=1)
+            since_7d = now - timedelta(days=7)
+            since_30d = now - timedelta(days=30)
+            dau_set = set()
+            for sql, params in [
+                ("SELECT DISTINCT user_id FROM post WHERE created_at >= %s", [since_1d]),
+                ("SELECT DISTINCT user_id FROM wallet_log WHERE created_at >= %s", [since_1d]),
+                ("SELECT DISTINCT user_id FROM order_main WHERE created_at >= %s", [since_1d]),
+            ]:
+                c.execute(sql, params)
+                dau_set.update(r[0] for r in c.fetchall())
+            wau_set, mau_set = set(), set()
+            for sql, params in [
+                ("SELECT DISTINCT user_id FROM post WHERE created_at >= %s", [since_7d]),
+                ("SELECT DISTINCT user_id FROM wallet_log WHERE created_at >= %s", [since_7d]),
+                ("SELECT DISTINCT user_id FROM order_main WHERE created_at >= %s", [since_7d]),
+            ]:
+                c.execute(sql, params)
+                wau_set.update(r[0] for r in c.fetchall())
+            for sql, params in [
+                ("SELECT DISTINCT user_id FROM post WHERE created_at >= %s", [since_30d]),
+                ("SELECT DISTINCT user_id FROM wallet_log WHERE created_at >= %s", [since_30d]),
+                ("SELECT DISTINCT user_id FROM order_main WHERE created_at >= %s", [since_30d]),
+            ]:
+                c.execute(sql, params)
+                mau_set.update(r[0] for r in c.fetchall())
+
+            # 新增用户：昨日、近7日、近30日
+            c.execute(
+                "SELECT COUNT(*) FROM user WHERE created_at >= %s AND created_at < %s",
+                [today - timedelta(days=1), today],
+            )
+            new_users_1d = (c.fetchone() or (0,))[0]
+            c.execute("SELECT COUNT(*) FROM user WHERE created_at >= %s", [since_7d])
+            new_users_7d = (c.fetchone() or (0,))[0]
+            c.execute("SELECT COUNT(*) FROM user WHERE created_at >= %s", [since_30d])
+            new_users_30d = (c.fetchone() or (0,))[0]
+
+            # 留存率：次日/7日/30日（注册于 N 天前的用户中，在之后有活动的比例）
+            def retention(reg_days_ago, activity_days_ago):
+                reg_start = today - timedelta(days=reg_days_ago + 1)
+                reg_end = today - timedelta(days=reg_days_ago)
+                act_start = today - timedelta(days=activity_days_ago)
+                act_end = (today + timedelta(days=1)) if activity_days_ago == 0 else (today - timedelta(days=activity_days_ago - 1))
+                c.execute(
+                    "SELECT COUNT(*) FROM user WHERE created_at >= %s AND created_at < %s",
+                    [reg_start, reg_end],
+                )
+                total = (c.fetchone() or (0,))[0]
+                if total == 0:
+                    return None
+                c.execute(
+                    "SELECT COUNT(DISTINCT u.id) FROM user u "
+                    "INNER JOIN (SELECT user_id FROM post WHERE created_at >= %s AND created_at < %s "
+                    "UNION SELECT user_id FROM wallet_log WHERE created_at >= %s AND created_at < %s "
+                    "UNION SELECT user_id FROM order_main WHERE created_at >= %s AND created_at < %s) a ON u.id = a.user_id "
+                    "WHERE u.created_at >= %s AND u.created_at < %s",
+                    [act_start, act_end, act_start, act_end, act_start, act_end, reg_start, reg_end],
+                )
+                active = (c.fetchone() or (0,))[0]
+                return round(100.0 * active / total, 1)
+            retention_1d = retention(1, 0)
+            retention_7d = retention(7, 6)
+            retention_30d = retention(30, 29)
+
+            # 业务数据
+            c.execute(
+                "SELECT COUNT(*), COALESCE(SUM(amount),0) FROM order_main WHERE status = 'paid' AND paid_at IS NOT NULL"
+            )
+            row = c.fetchone()
+            order_count = (row[0] or 0)
+            gmv = float(row[1] or 0)
+            post_count = Post.objects.filter(status=1).count()
+            total_users = User.objects.count()
+            c.execute("SELECT COUNT(DISTINCT user_id) FROM order_main WHERE status = 'paid' AND paid_at IS NOT NULL")
+            paid_users = (c.fetchone() or (0,))[0]
+            conversion = round(100.0 * paid_users / total_users, 1) if total_users else 0
+
+            # 待办数量
+            c.execute("SELECT COUNT(*) FROM teacher_apply WHERE status = 'pending'")
+            teacher_pending = (c.fetchone() or (0,))[0]
+            withdraw_pending = WithdrawApply.objects.filter(status="pending").count()
+            report_pending = Report.objects.filter(status="pending").count()
+
+        # 趋势：按 period 聚合
+        trend = []
+        if start_date and end_date:
+            try:
+                from datetime import datetime as dt
+                start = dt.strptime(start_date, "%Y-%m-%d").date()
+                end = dt.strptime(end_date, "%Y-%m-%d").date()
+            except Exception:
+                start, end = today - timedelta(days=30), today
+        else:
+            start = today - timedelta(days=30)
+            end = today
+        with connection.cursor() as c:
+            if period == "day":
+                c.execute(
+                    "SELECT DATE(created_at) AS d, COUNT(*) AS cnt FROM user WHERE created_at >= %s AND created_at <= %s GROUP BY DATE(created_at) ORDER BY d",
+                    [start, end],
+                )
+                new_by_day = {str(r[0]): r[1] for r in c.fetchall()}
+                c.execute(
+                    "SELECT DATE(created_at) AS d, COUNT(*) FROM post WHERE created_at >= %s AND created_at <= %s GROUP BY DATE(created_at) ORDER BY d",
+                    [start, end],
+                )
+                post_by_day = {str(r[0]): r[1] for r in c.fetchall()}
+                c.execute(
+                    "SELECT DATE(paid_at) AS d, COUNT(*), COALESCE(SUM(amount),0) FROM order_main WHERE status='paid' AND paid_at IS NOT NULL AND paid_at >= %s AND paid_at <= %s GROUP BY DATE(paid_at) ORDER BY d",
+                    [start, end],
+                )
+                order_by_day = {}
+                gmv_by_day = {}
+                for r in c.fetchall():
+                    order_by_day[str(r[0])] = r[1]
+                    gmv_by_day[str(r[0])] = float(r[2])
+                d = start
+                while d <= end:
+                    ds = str(d)
+                    trend.append({
+                        "date": ds,
+                        "newUsers": new_by_day.get(ds, 0),
+                        "postCount": post_by_day.get(ds, 0),
+                        "orderCount": order_by_day.get(ds, 0),
+                        "gmv": gmv_by_day.get(ds, 0),
+                    })
+                    d += timedelta(days=1)
+            else:
+                c.execute(
+                    "SELECT DATE(created_at) AS d, COUNT(*) FROM user WHERE created_at >= %s AND created_at <= %s GROUP BY DATE(created_at) ORDER BY d",
+                    [start, end],
+                )
+                rows = c.fetchall()
+                for r in rows:
+                    trend.append({"date": str(r[0]), "newUsers": r[1], "postCount": 0, "orderCount": 0, "gmv": 0})
+                if not trend and start <= end:
+                    trend = [{"date": str(start), "newUsers": 0, "postCount": 0, "orderCount": 0, "gmv": 0}]
+
+        return Response(_result(data={
+            "realtime": {
+                "dau": len(dau_set),
+                "wau": len(wau_set),
+                "mau": len(mau_set),
+                "newUsers1d": new_users_1d,
+                "newUsers7d": new_users_7d,
+                "newUsers30d": new_users_30d,
+                "retention1d": retention_1d,
+                "retention7d": retention_7d,
+                "retention30d": retention_30d,
+            },
+            "business": {
+                "orderCount": order_count,
+                "gmv": gmv,
+                "postCount": post_count,
+                "paidConversionRate": conversion,
+            },
+            "pending": {
+                "teacherPendingCount": teacher_pending,
+                "withdrawPendingCount": withdraw_pending,
+                "reportPendingCount": report_pending,
+            },
+            "trend": trend,
+            "period": period,
+            "startDate": str(start),
+            "endDate": str(end),
+        }))
+    except Exception as e:
+        return Response(_result(500, str(e)), status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+
+
 @api_view(["GET"])
 @admin_api_required
 def dashboard_stats(request):
-    """统计：用户数、帖子数、待审核名师、待审核提现、待处理举报"""
+    """兼容旧接口：返回核心看板中的 pending + 总用户/帖子数"""
     try:
         with connection.cursor() as c:
             user_count = User.objects.count()
@@ -275,19 +469,32 @@ def report_list(request):
 @api_view(["POST"])
 @admin_api_required
 def report_handle(request, report_id):
-    """处理举报：status=handled, handle_result 可选"""
+    """处理举报：status=handled；可选 punish_post=1 下架被举报帖子，punish_user=1 禁用被举报用户"""
     try:
         r = Report.objects.filter(id=report_id).first()
         if not r:
             return Response(_result(404, "举报不存在"), status=status.HTTP_404_NOT_FOUND)
         if r.status != "pending":
             return Response(_result(400, "已处理过"), status=status.HTTP_400_BAD_REQUEST)
-        handle_result = (request.data.get("handleResult") or request.data.get("handle_result") or "").strip()[:255]
+        data = request.data or {}
+        handle_result = (data.get("handleResult") or data.get("handle_result") or "").strip()[:255]
+        punish_post = data.get("punishPost") or data.get("punish_post")
+        punish_user = data.get("punishUser") or data.get("punish_user")
         Report.objects.filter(id=report_id).update(
             status="handled",
             handle_result=handle_result or None,
             handled_at=timezone.now(),
         )
+        if punish_post and r.target_type == "post":
+            Post.objects.filter(id=r.target_id).update(status=0)
+        if punish_user:
+            uid = r.target_id if r.target_type == "user" else None
+            if uid is None and r.target_type == "post":
+                p = Post.objects.filter(id=r.target_id).first()
+                if p:
+                    uid = p.user_id
+            if uid is not None:
+                User.objects.filter(id=uid).update(status=0)
         return Response(_result(data={"message": "已处理"}))
     except Exception as e:
         return Response(_result(500, str(e)), status=status.HTTP_500_INTERNAL_SERVER_ERROR)
@@ -409,5 +616,86 @@ def user_set_status(request, user_id):
             return Response(_result(404, "用户不存在"), status=status.HTTP_404_NOT_FOUND)
         User.objects.filter(id=user_id).update(status=s)
         return Response(_result(data={"message": "已禁用" if s == 0 else "已启用"}))
+    except Exception as e:
+        return Response(_result(500, str(e)), status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+
+
+@api_view(["POST"])
+@admin_api_required
+def user_delete(request, user_id):
+    """删除用户（软删：将 status 设为 0 并清空敏感信息；或硬删需谨慎）"""
+    try:
+        u = User.objects.filter(id=user_id).first()
+        if not u:
+            return Response(_result(404, "用户不存在"), status=status.HTTP_404_NOT_FOUND)
+        User.objects.filter(id=user_id).update(
+            status=0,
+            mobile="",
+            password_hash="",
+            nickname=f"已删除_{user_id}",
+            avatar_url="",
+            updated_at=timezone.now(),
+        )
+        return Response(_result(data={"message": "已删除"}))
+    except Exception as e:
+        return Response(_result(500, str(e)), status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+
+
+# ---------- AI 提示词配置 ----------
+@api_view(["GET"])
+@admin_api_required
+def ai_prompt_list(request):
+    """所有 AI 提示词列表"""
+    try:
+        with connection.cursor() as c:
+            c.execute("SELECT `key`, name, content, updated_at FROM ai_prompt ORDER BY `key`")
+            rows = c.fetchall()
+            col = [d[0] for d in c.description]
+        items = [dict(zip(col, row)) for row in rows]
+        for x in items:
+            u = x.pop("updated_at", None)
+            x["updatedAt"] = u.isoformat() if u else None
+            x["key"] = x.get("key")
+        return Response(_result(data={"list": items}))
+    except Exception as e:
+        return Response(_result(500, str(e)), status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+
+
+@api_view(["GET"])
+@admin_api_required
+def ai_prompt_get(request, key):
+    """单个 AI 提示词"""
+    try:
+        with connection.cursor() as c:
+            c.execute("SELECT `key`, name, content, updated_at FROM ai_prompt WHERE `key` = %s", [key])
+            row = c.fetchone()
+        if not row:
+            return Response(_result(404, "不存在"), status=status.HTTP_404_NOT_FOUND)
+        col = ["key", "name", "content", "updated_at"]
+        item = dict(zip(col, row))
+        item["updatedAt"] = item["updated_at"].isoformat() if item.get("updated_at") else None
+        del item["updated_at"]
+        return Response(_result(data=item))
+    except Exception as e:
+        return Response(_result(500, str(e)), status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+
+
+@api_view(["PUT", "POST"])
+@admin_api_required
+def ai_prompt_update(request, key):
+    """更新 AI 提示词。body: { name?, content }"""
+    try:
+        data = request.data or {}
+        name = (data.get("name") or "").strip()[:128]
+        content = (data.get("content") or "").strip()
+        if not content:
+            return Response(_result(400, "content 不能为空"), status=status.HTTP_400_BAD_REQUEST)
+        with connection.cursor() as c:
+            c.execute(
+                "INSERT INTO ai_prompt (`key`, name, content, updated_at) VALUES (%s, %s, %s, NOW()) "
+                "ON DUPLICATE KEY UPDATE name = VALUES(name), content = VALUES(content), updated_at = NOW()",
+                [key, name or key, content],
+            )
+        return Response(_result(data={"message": "已保存", "key": key}))
     except Exception as e:
         return Response(_result(500, str(e)), status=status.HTTP_500_INTERNAL_SERVER_ERROR)

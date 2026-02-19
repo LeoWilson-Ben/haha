@@ -44,6 +44,12 @@ mysql -u root -p lingshu < sql/migrate_voice_room.sql
 mysql -u root -p lingshu < sql/migrate_privacy_settings.sql
 ```
 
+**AI 提示词配置**（管理后台可自定义各场景 AI 提示词）：
+
+```bash
+mysql -u root -p lingshu < sql/migrate_ai_prompt.sql
+```
+
 ## 启动
 
 **本机访问**：
@@ -79,4 +85,4 @@ python manage.py runserver 0.0.0.0:8080
 
 - **鉴权**：在 `config/settings.py` 或环境变量中设置 `ADMIN_API_KEY`。未设置时仅在 `DEBUG=True` 下允许访问。
 - **示例**：生产环境可设置 `export ADMIN_API_KEY=your-secret-key`，管理端前端在「系统配置」中填写相同密钥并保存后即可请求接口。
-- **接口**：仪表盘统计、名师入驻审核（列表/通过/驳回）、帖子列表/下架、举报列表/处理、提现列表/通过/驳回、用户列表/禁用启用等，见 `apps/admin_api/urls.py`。
+- **接口**：核心数据看板（DAU/WAU/MAU、留存、订单/交易额、趋势）、仪表盘兼容、名师审核、帖子/举报/提现/用户（含删除）、AI 提示词 CRUD，见 `apps/admin_api/urls.py`。
