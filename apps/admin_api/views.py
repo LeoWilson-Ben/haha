@@ -4,6 +4,7 @@ import json
 from datetime import timedelta
 from decimal import Decimal
 
+from django.core.cache import cache
 from django.db import connection
 from django.utils import timezone
 from rest_framework import status
@@ -639,14 +640,93 @@ def user_set_status(request, user_id):
         return Response(_result(500, str(e)), status=status.HTTP_500_INTERNAL_SERVER_ERROR)
 
 
+def _clear_user_related_records(user_id):
+    """删除用户时清空该用户在所有关联表中的记录（在事务外按表执行，单表失败不阻断）"""
+    uid = [user_id]
+    with connection.cursor() as c:
+        # IM：消息、会话成员、群申请、聊天申请
+        try:
+            c.execute("DELETE FROM message WHERE sender_id = %s", uid)
+            c.execute("DELETE FROM conversation_member WHERE user_id = %s", uid)
+            c.execute("DELETE FROM chat_apply WHERE from_user_id = %s OR to_user_id = %s", [user_id, user_id])
+        except Exception:
+            pass
+        try:
+            c.execute("DELETE FROM group_join_apply WHERE user_id = %s", uid)
+        except Exception:
+            pass
+        # 互动通知、关注、点赞、收藏
+        try:
+            c.execute("DELETE FROM notification WHERE user_id = %s OR from_user_id = %s", [user_id, user_id])
+            c.execute("DELETE FROM user_follow WHERE user_id = %s OR target_user_id = %s", [user_id, user_id])
+            c.execute("DELETE FROM post_like WHERE user_id = %s", uid)
+            c.execute("DELETE FROM post_favorite WHERE user_id = %s", uid)
+        except Exception:
+            pass
+        # 评论：该用户发的评论 + 该用户帖子下的评论
+        try:
+            c.execute("DELETE FROM comment WHERE user_id = %s", uid)
+            c.execute("SELECT id FROM post WHERE user_id = %s", uid)
+            post_ids = [r[0] for r in c.fetchall()]
+            if post_ids:
+                placeholders = ",".join(["%s"] * len(post_ids))
+                c.execute(f"DELETE FROM comment WHERE post_id IN ({placeholders})", post_ids)
+                c.execute(f"DELETE FROM post_like WHERE post_id IN ({placeholders})", post_ids)
+                c.execute(f"DELETE FROM post_favorite WHERE post_id IN ({placeholders})", post_ids)
+            c.execute("DELETE FROM post WHERE user_id = %s", uid)
+        except Exception:
+            pass
+        # 举报、处罚、匹配配置、语音房间
+        try:
+            c.execute("DELETE FROM report WHERE reporter_id = %s", uid)
+            c.execute("DELETE FROM user_punish WHERE user_id = %s", uid)
+            c.execute("DELETE FROM match_config WHERE user_id = %s", uid)
+        except Exception:
+            pass
+        try:
+            c.execute("DELETE FROM voice_room WHERE user_id_1 = %s OR user_id_2 = %s", [user_id, user_id])
+        except Exception:
+            pass
+        # AI 名师会话及消息
+        try:
+            c.execute("SELECT id FROM ai_master_chat_session WHERE user_id = %s", uid)
+            session_ids = [r[0] for r in c.fetchall()]
+            if session_ids:
+                placeholders = ",".join(["%s"] * len(session_ids))
+                c.execute(f"DELETE FROM ai_master_chat_message WHERE session_id IN ({placeholders})", session_ids)
+            c.execute("DELETE FROM ai_master_chat_session WHERE user_id = %s", uid)
+        except Exception:
+            pass
+        # 用户扩展与命理
+        try:
+            c.execute("DELETE FROM user_profile WHERE user_id = %s", uid)
+            c.execute("DELETE FROM login_device WHERE user_id = %s", uid)
+            c.execute("DELETE FROM user_bazi WHERE user_id = %s", uid)
+            c.execute("DELETE FROM bazi_report WHERE user_id = %s", uid)
+            c.execute("DELETE FROM fengshui_record WHERE user_id = %s", uid)
+            c.execute("DELETE FROM hepan_record WHERE user_id = %s OR target_user_id = %s", [user_id, user_id])
+            c.execute("DELETE FROM teacher_apply WHERE user_id = %s", uid)
+        except Exception:
+            pass
+    # 今日养生缓存（按 user_id 的 key 无法批量删，只删常见 key 模式）
+    try:
+        from apps.fortune.views import HEALTH_CACHE_PREFIX
+        from datetime import date
+        today = date.today().strftime("%Y-%m-%d")
+        cache.delete(f"{HEALTH_CACHE_PREFIX}{user_id}:{today}")
+    except Exception:
+        pass
+
+
 @api_view(["POST"])
 @admin_api_required
 def user_delete(request, user_id):
-    """删除用户（软删：将 status 设为 0 并清空敏感信息；或硬删需谨慎）"""
+    """删除用户：软删 user 并清空该用户在所有关联表中的记录"""
     try:
         u = User.objects.filter(id=user_id).first()
         if not u:
             return Response(_result(404, "用户不存在"), status=status.HTTP_404_NOT_FOUND)
+        _clear_user_related_records(user_id)
         User.objects.filter(id=user_id).update(
             status=0,
             mobile="",
