@@ -838,13 +838,13 @@ def ai_master_chat(request):
         pass
 
     history = _get_ai_chat_messages(session_id)
-    llm_messages = [
-        {"role": "system", "content": """你是传统文化名师，精通八字命理、风水、国学等。请用自然、亲切、口语化的方式与用户交流，像老朋友聊天一样，避免过于正式或教科书式的表述。
+    default_system = """你是传统文化名师，精通八字命理、风水、国学等。请用自然、亲切、口语化的方式与用户交流，像老朋友聊天一样，避免过于正式或教科书式的表述。
 - 语气温和、有温度，适当使用口语表达
 - 避免「综上所述」「首先其次」等僵硬结构
 - 可适当使用比喻、举例，让内容更生动易懂
-- 根据对话历史理解上下文，回复控制在 300 字以内"""},
-    ]
+- 根据对话历史理解上下文，回复控制在 300 字以内"""
+    system_content = _get_ai_prompt("ai_master_chat", default_system)
+    llm_messages = [{"role": "system", "content": system_content}]
     for h in history:
         llm_messages.append({"role": h["role"], "content": h["content"]})
 

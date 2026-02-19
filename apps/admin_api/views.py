@@ -644,14 +644,19 @@ def user_delete(request, user_id):
 # ---------- AI 提示词配置 ----------
 @api_view(["GET"])
 @admin_api_required
+# 不在后台展示/编辑的 key（仅由代码使用默认提示词）
+AI_PROMPT_HIDDEN_KEYS = {"xiyongshen"}
+
+
 def ai_prompt_list(request):
-    """所有 AI 提示词列表"""
+    """所有 AI 提示词列表（不含喜用神等隐藏项）"""
     try:
         with connection.cursor() as c:
             c.execute("SELECT `key`, name, content, updated_at FROM ai_prompt ORDER BY `key`")
             rows = c.fetchall()
             col = [d[0] for d in c.description]
         items = [dict(zip(col, row)) for row in rows]
+        items = [x for x in items if x.get("key") not in AI_PROMPT_HIDDEN_KEYS]
         for x in items:
             u = x.pop("updated_at", None)
             x["updatedAt"] = u.isoformat() if u else None
@@ -665,6 +670,8 @@ def ai_prompt_list(request):
 @admin_api_required
 def ai_prompt_get(request, key):
     """单个 AI 提示词"""
+    if key in AI_PROMPT_HIDDEN_KEYS:
+        return Response(_result(404, "不存在"), status=status.HTTP_404_NOT_FOUND)
     try:
         with connection.cursor() as c:
             c.execute("SELECT `key`, name, content, updated_at FROM ai_prompt WHERE `key` = %s", [key])
@@ -684,6 +691,8 @@ def ai_prompt_get(request, key):
 @admin_api_required
 def ai_prompt_update(request, key):
     """更新 AI 提示词。body: { name?, content }"""
+    if key in AI_PROMPT_HIDDEN_KEYS:
+        return Response(_result(404, "不允许修改"), status=status.HTTP_404_NOT_FOUND)
     try:
         data = request.data or {}
         name = (data.get("name") or "").strip()[:128]
