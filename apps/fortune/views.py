@@ -347,23 +347,6 @@ def _save_user_constitution(user_id, constitution):
         logger.warning("保存体质到 user_profile 失败: %s", e)
 
 
-def _strip_leading_markdown_label(text):
-    """去掉今日养生内容开头的「Markdown」「Markdown格式：」等模型自加的说明行。"""
-    if not text or not isinstance(text, str):
-        return text or ""
-    lines = text.split("\n")
-    if not lines:
-        return text
-    first = (lines[0] or "").strip()
-    if not first:
-        return "\n".join(lines[1:]).strip() or text
-    if re.match(r"^(markdown|markdown格式|以下是.*markdown)[：:\s]*$", first, re.IGNORECASE):
-        return "\n".join(lines[1:]).strip()
-    if re.match(r"^[Mm]arkdown\s*[：:]\s*$", first):
-        return "\n".join(lines[1:]).strip()
-    return text
-
-
 @api_view(["GET"])
 @permission_classes([AllowAny])
 def daily_health(request):
@@ -388,9 +371,8 @@ def daily_health(request):
     cache_key = f"{HEALTH_CACHE_PREFIX}{user_id}:{today_str}"
     cached = cache.get(cache_key)
     if cached is not None:
-        content_out = _strip_leading_markdown_label(cached)
         return Response(_result(data={
-            "content": content_out,
+            "content": cached,
             "date": today_str,
             "constitution": constitution,
             "solarTerm": solar_term,
@@ -402,7 +384,7 @@ def daily_health(request):
 【用户体质】{constitution}
 【当前节气】{solar_term}
 
-请用简洁、实用的语气，直接输出以下内容（不要输出「Markdown格式」等说明文字）：1. 宜饮（茶饮、汤水等） 2. 宜食（食材、菜品建议） 3. 养生小贴士，每项 1-2 条，控制在 200 字以内。用 ## 二级标题区分小节，列表用 - 即可。"""
+请用简洁、实用的语气，输出 1. 宜饮（茶饮、汤水等） 2. 宜食（食材、菜品建议） 3. 养生小贴士，每项 1-2 条，控制在 200 字以内。用 Markdown 格式输出，不要标题编号外的多余格式。"""
     prompt = _get_ai_prompt("daily_health", default_prompt, today_fmt=today_fmt, constitution=constitution, solar_term=solar_term)
     try:
         from openai import OpenAI
@@ -419,7 +401,6 @@ def daily_health(request):
             timeout=60.0,
         )
         content = (completion.choices[0].message.content if completion.choices else "").strip() or f"今日{solar_term}，宜清淡饮食、规律作息。"
-        content = _strip_leading_markdown_label(content)
         cache.set(cache_key, content, timeout=HEALTH_CACHE_TTL)
         return Response(_result(data={
             "content": content,
