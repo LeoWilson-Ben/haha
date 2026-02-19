@@ -7,6 +7,7 @@
 import base64
 import logging
 import os
+import re
 from datetime import date
 
 from django.core.cache import cache
@@ -279,8 +280,13 @@ HEALTH_CACHE_PREFIX = "fortune:health:"
 HEALTH_CACHE_TTL = 86400 * 2  # 48 小时
 
 
+# 体质测试/今日养生支持的体质类型（与体质检测报告中的表述一致）
+CONSTITUTION_TYPES = ("气虚", "阳虚", "阴虚", "痰湿", "湿热", "血瘀", "气郁", "特禀", "平和")
+
+
 def _get_user_constitution(user_id):
-    """获取用户中医体质，未存储时返回 None（用平和代替）"""
+    """获取用户中医体质，未存储时返回 None（今日养生会用平和代替）。
+    体质来源：体质测试完成后会写入此处，今日养生即使用该体质。"""
     try:
         with connection.cursor() as c:
             c.execute(
@@ -293,6 +299,52 @@ def _get_user_constitution(user_id):
     except Exception:
         pass
     return None
+
+
+def _extract_constitution_from_report(content):
+    """从体质检测报告正文中提取体质类型，供写入 user_profile 与今日养生使用。"""
+    if not content or not isinstance(content, str):
+        return None
+    text = content.strip()
+    # 优先匹配 "体质类型：XXX" / "体质：XXX型" 等
+    for pattern in (
+        r"体质[类型]*[：:]\s*([^\s，。、型]+)",
+        r"辨证[为為]?\s*([^\s，。、]+)体质",
+        r"([^\s，。、]+)型体质",
+    ):
+        m = re.search(pattern, text)
+        if m:
+            raw = m.group(1).strip()
+            for t in CONSTITUTION_TYPES:
+                if t in raw or raw in t:
+                    return t
+            if raw in CONSTITUTION_TYPES:
+                return raw
+    # 否则在报告前半段查找首次出现的已知体质词
+    head = text[:800]
+    for t in CONSTITUTION_TYPES:
+        if t in head:
+            return t
+    return None
+
+
+def _save_user_constitution(user_id, constitution):
+    """将体质写入 user_profile，供今日养生使用。仅当体质为 CONSTITUTION_TYPES 之一时才保存。"""
+    if not constitution or not str(constitution).strip():
+        return
+    val = str(constitution).strip()[:32]
+    if val not in CONSTITUTION_TYPES:
+        return
+    try:
+        with connection.cursor() as c:
+            c.execute(
+                "INSERT INTO user_profile (user_id, constitution, created_at, updated_at) "
+                "VALUES (%s, %s, NOW(), NOW()) "
+                "ON DUPLICATE KEY UPDATE constitution = VALUES(constitution), updated_at = NOW()",
+                [user_id, val],
+            )
+    except Exception as e:
+        logger.warning("保存体质到 user_profile 失败: %s", e)
 
 
 @api_view(["GET"])
@@ -638,7 +690,11 @@ def constitution_test(request):
             timeout=90.0,
         )
         content = (completion.choices[0].message.content if completion.choices else "").strip() or "未能生成报告，请稍后重试。"
-        return Response(_result(data={"content": content}))
+        # 从报告中提取体质类型并写入 user_profile，供今日养生使用
+        constitution = _extract_constitution_from_report(content)
+        if constitution:
+            _save_user_constitution(user_id, constitution)
+        return Response(_result(data={"content": content, "constitution": constitution}))
     except Exception as e:
         logger.exception("体质检测失败")
         return Response(

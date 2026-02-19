@@ -425,7 +425,7 @@ def _user_id_from_request(request):
 
 
 def _get_user_profile(user_id):
-    """从 user_profile 表读取 intro、birth_date、birth_time、is_master"""
+    """从 user_profile 表读取 intro、birth_date、birth_time、is_master、constitution"""
     from django.db import connection
     try:
         with connection.cursor() as c:
@@ -452,12 +452,21 @@ def _get_user_profile(user_id):
             is_master_val = bool(row[3])
         elif len(row) >= 3:  # intro, birth_date, is_master (old schema)
             is_master_val = bool(row[2])
-        return {
+        out = {
             "intro": row[0] or "",
             "birthDate": row[1].strftime("%Y-%m-%d") if row[1] else None,
             "birthTime": birth_time_val,
             "isMaster": is_master_val,
         }
+        try:
+            with connection.cursor() as c:
+                c.execute("SELECT constitution FROM user_profile WHERE user_id = %s", [user_id])
+                r = c.fetchone()
+                if r and r[0]:
+                    out["constitution"] = str(r[0]).strip()
+        except Exception:
+            pass
+        return out
     return {"intro": "", "birthDate": None, "birthTime": None, "isMaster": False}
 
 
@@ -497,6 +506,7 @@ def me(request):
         "intro": profile["intro"],
         "birthDate": profile["birthDate"],
         "birthTime": profile.get("birthTime"),
+        "constitution": profile.get("constitution"),
         "followCount": follow_count,
         "followerCount": follower_count,
         "postCount": post_count,
@@ -558,6 +568,30 @@ def user_location(request):
         except Exception:
             pass
     return Response(_result(data={"locationCode": loc or None}))
+
+
+# 体质可选值（与体质测试结果、今日养生一致，仅允许以下之一）
+CONSTITUTION_CHOICES = ("气虚", "阳虚", "阴虚", "痰湿", "湿热", "血瘀", "气郁", "特禀", "平和")
+
+
+def _save_user_constitution(user_id, constitution):
+    """保存中医体质到 user_profile，供今日养生使用。仅当为允许的选项之一时才保存。"""
+    if constitution is None:
+        return
+    val = (str(constitution).strip() or "")[:32]
+    if val not in CONSTITUTION_CHOICES:
+        return
+    from django.db import connection
+    try:
+        with connection.cursor() as c:
+            c.execute(
+                "INSERT INTO user_profile (user_id, constitution, created_at, updated_at) "
+                "VALUES (%s, %s, NOW(), NOW()) "
+                "ON DUPLICATE KEY UPDATE constitution = VALUES(constitution), updated_at = NOW()",
+                [user_id, val],
+            )
+    except Exception:
+        pass
 
 
 def _upsert_user_profile(user_id, intro=None, birth_date=None, birth_time=None):
@@ -626,6 +660,9 @@ def update_profile(request):
     birth_time = request.data.get("birthTime")
     if intro is not None or birth_date is not None or birth_time is not None:
         _upsert_user_profile(user_id, intro=intro, birth_date=birth_date, birth_time=birth_time)
+    constitution = request.data.get("constitution")
+    if constitution is not None:
+        _save_user_constitution(user_id, constitution)
     prof = _get_user_profile(user_id)
     return Response(_result(data={
         "nickname": user.nickname,
@@ -634,6 +671,7 @@ def update_profile(request):
         "intro": prof["intro"],
         "birthDate": prof["birthDate"],
         "birthTime": prof.get("birthTime"),
+        "constitution": prof.get("constitution"),
     }))
 
 
