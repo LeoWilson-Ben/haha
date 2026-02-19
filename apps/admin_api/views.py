@@ -729,7 +729,7 @@ def user_delete(request, user_id):
         _clear_user_related_records(user_id)
         User.objects.filter(id=user_id).update(
             status=0,
-            mobile="",
+            mobile=f"deleted_{user_id}",  # 保持 uk_mobile 唯一，不能置空
             password_hash="",
             nickname=f"已删除_{user_id}",
             avatar_url="",
