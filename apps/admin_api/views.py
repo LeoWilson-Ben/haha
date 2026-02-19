@@ -400,12 +400,31 @@ def post_list(request):
     items = []
     for p in posts:
         u = users.get(p.user_id)
+        media_urls = []
+        if p.media_urls_json:
+            try:
+                media_urls = json.loads(p.media_urls_json) if isinstance(p.media_urls_json, str) else p.media_urls_json
+            except (TypeError, ValueError):
+                pass
+        if not isinstance(media_urls, list):
+            media_urls = []
+        media_cover_urls = []
+        if getattr(p, "media_cover_urls_json", None):
+            try:
+                media_cover_urls = json.loads(p.media_cover_urls_json) if isinstance(p.media_cover_urls_json, str) else p.media_cover_urls_json
+            except (TypeError, ValueError):
+                pass
+        if not isinstance(media_cover_urls, list):
+            media_cover_urls = []
         items.append({
             "id": p.id,
             "userId": p.user_id,
             "nickname": getattr(u, "nickname", None) or f"用户{p.user_id}",
             "content": (p.content or "")[:200],
+            "contentFull": p.content or "",
             "mediaType": p.media_type or "image_text",
+            "mediaUrls": media_urls,
+            "mediaCoverUrls": media_cover_urls,
             "status": p.status,
             "likeCount": p.like_count,
             "commentCount": p.comment_count,

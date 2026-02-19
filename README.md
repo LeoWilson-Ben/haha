@@ -1,4 +1,4 @@
-# 灵枢后端（Django）
+# 玄遇后端（Django）
 
 Python Django + MySQL 8.0 + Redis，连接方式见需求文档末尾。
 
