@@ -642,12 +642,12 @@ def user_delete(request, user_id):
 
 
 # ---------- AI 提示词配置 ----------
-@api_view(["GET"])
-@admin_api_required
 # 不在后台展示/编辑的 key（仅由代码使用默认提示词）
 AI_PROMPT_HIDDEN_KEYS = {"xiyongshen"}
 
 
+@api_view(["GET"])
+@admin_api_required
 def ai_prompt_list(request):
     """所有 AI 提示词列表（不含喜用神等隐藏项）"""
     try:
