@@ -358,11 +358,57 @@ def invalidate_daily_health_cache(user_id):
         pass
 
 
+def _get_user_location_for_health(user_id, request):
+    """获取用户定位（IP 定位地址），用于天气查询。优先用 user_profile.region_code，否则用请求 IP 属地。返回去空格后的城市名。"""
+    loc = None
+    try:
+        with connection.cursor() as c:
+            c.execute("SELECT region_code FROM user_profile WHERE user_id = %s", [user_id])
+            row = c.fetchone()
+        if row and row[0] and str(row[0]).strip():
+            loc = str(row[0]).strip()
+    except Exception:
+        pass
+    if not loc:
+        from apps.system.views import get_ip_location_for_request
+        loc = get_ip_location_for_request(request)
+    if not loc or loc in ("本地", "内网", "未知"):
+        return None
+    return (loc or "").replace(" ", "").strip()[:32] or None
+
+
+def _get_weather_for_location(city):
+    """调用 uapis.cn 天气接口，city 为去空格后的地址（如 郑州市、河南省郑州市）。返回天气信息 dict 或 None。"""
+    if not city:
+        return None
+    try:
+        from uapi import UapiClient
+        from uapi.errors import UapiError
+        token = os.getenv("UAPI_TOKEN", "")
+        client = UapiClient("https://uapis.cn", token=token if token else None)
+        result = client.misc.get_misc_weather(
+            city=city,
+            adcode="",
+            extended=False,
+            forecast=False,
+            hourly=False,
+            minutely=False,
+            indices=False,
+            lang="zh",
+        )
+        if result and isinstance(result, dict):
+            return result
+        return None
+    except Exception as e:
+        logger.debug("天气接口调用失败 city=%s: %s", city, e)
+        return None
+
+
 @api_view(["GET"])
 @permission_classes([AllowAny])
 def daily_health(request):
     """
-    今日养生：根据用户中医体质 + 24 节气，推荐当日适宜饮用、食用的内容。
+    今日养生：根据用户中医体质 + 24 节气 + 当地天气，推荐当日适宜饮用、食用的内容。
     需登录。体质未填写时按「平和」处理。每天每用户只生成一次，结果缓存于 Redis。
     """
     user_id = _user_id_from_request(request)
@@ -379,10 +425,36 @@ def daily_health(request):
     except Exception:
         solar_term = "立春"  # fallback
 
-    # 缓存 key 包含体质，体质变更后自动用新 key，不会返回旧内容
-    cache_key = f"{HEALTH_CACHE_PREFIX}{user_id}:{today_str}:{constitution}"
+    city = _get_user_location_for_health(user_id, request)
+    weather = _get_weather_for_location(city) if city else None
+    weather_str = ""
+    if weather:
+        parts = []
+        if weather.get("weather"):
+            parts.append(weather["weather"])
+        if weather.get("temperature") is not None:
+            parts.append(f"{weather['temperature']}℃")
+        if weather.get("wind_direction") or weather.get("wind_power"):
+            parts.append((weather.get("wind_direction") or "") + (weather.get("wind_power") or ""))
+        if weather.get("humidity") is not None:
+            parts.append(f"湿度{weather['humidity']}%")
+        if parts:
+            weather_str = "，".join(str(p) for p in parts)
+            if weather.get("city"):
+                weather_str = f"{weather['city']}：{weather_str}"
+
+    # 缓存 key 包含体质和定位，体质/地址变更后自动用新 key
+    cache_key = f"{HEALTH_CACHE_PREFIX}{user_id}:{today_str}:{constitution}:{city or 'default'}"
     cached = cache.get(cache_key)
     if cached is not None:
+        if isinstance(cached, dict):
+            return Response(_result(data={
+                "content": cached.get("content", ""),
+                "date": today_str,
+                "constitution": constitution,
+                "solarTerm": solar_term,
+                "weather": cached.get("weather"),
+            }))
         return Response(_result(data={
             "content": cached,
             "date": today_str,
@@ -391,13 +463,16 @@ def daily_health(request):
         }))
 
     today_fmt = today.strftime("%Y年%m月%d日")
+    weather_block = f"\n【当地天气】{weather_str}\n" if weather_str else "\n"
     default_prompt = f"""你是一位中医养生专家。请根据以下信息，为用户推荐今日（{today_fmt}）适宜饮用、食用的内容。
 
 【用户体质】{constitution}
-【当前节气】{solar_term}
-
+【当前节气】{solar_term}{weather_block}
 请用简洁、实用的语气，输出 1. 宜饮（茶饮、汤水等） 2. 宜食（食材、菜品建议） 3. 养生小贴士，每项 1-2 条，控制在 200 字以内。用 Markdown 格式输出，不要标题编号外的多余格式。"""
-    prompt = _get_ai_prompt("daily_health", default_prompt, today_fmt=today_fmt, constitution=constitution, solar_term=solar_term)
+    prompt = _get_ai_prompt(
+        "daily_health", default_prompt,
+        today_fmt=today_fmt, constitution=constitution, solar_term=solar_term, weather=weather_str,
+    )
     try:
         from openai import OpenAI
         client = OpenAI(
@@ -413,12 +488,13 @@ def daily_health(request):
             timeout=60.0,
         )
         content = (completion.choices[0].message.content if completion.choices else "").strip() or f"今日{solar_term}，宜清淡饮食、规律作息。"
-        cache.set(cache_key, content, timeout=HEALTH_CACHE_TTL)
+        cache.set(cache_key, {"content": content, "weather": weather}, timeout=HEALTH_CACHE_TTL)
         return Response(_result(data={
             "content": content,
             "date": today_str,
             "constitution": constitution,
             "solarTerm": solar_term,
+            "weather": weather,
         }))
     except Exception as e:
         logger.exception("今日养生生成失败")
@@ -428,6 +504,7 @@ def daily_health(request):
             "date": today_str,
             "constitution": constitution,
             "solarTerm": solar_term,
+            "weather": weather,
         }))
 
 

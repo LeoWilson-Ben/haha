@@ -12,3 +12,4 @@ alibabacloud_dypnsapi20170525>=2.0.0,<3.0.0
 alibabacloud_tea_openapi>=0.3.0
 oss2>=2.18.0
 gunicorn>=21.0
+uapi-sdk-python>=0.1.5
