@@ -345,6 +345,17 @@ def _save_user_constitution(user_id, constitution):
             )
     except Exception as e:
         logger.warning("保存体质到 user_profile 失败: %s", e)
+        return
+    invalidate_daily_health_cache(user_id)
+
+
+def invalidate_daily_health_cache(user_id):
+    """清除用户当日今日养生缓存，下次请求将按当前体质重新生成。"""
+    try:
+        today_str = date.today().strftime("%Y-%m-%d")
+        cache.delete(f"{HEALTH_CACHE_PREFIX}{user_id}:{today_str}")
+    except Exception:
+        pass
 
 
 @api_view(["GET"])
@@ -368,7 +379,8 @@ def daily_health(request):
     except Exception:
         solar_term = "立春"  # fallback
 
-    cache_key = f"{HEALTH_CACHE_PREFIX}{user_id}:{today_str}"
+    # 缓存 key 包含体质，体质变更后自动用新 key，不会返回旧内容
+    cache_key = f"{HEALTH_CACHE_PREFIX}{user_id}:{today_str}:{constitution}"
     cached = cache.get(cache_key)
     if cached is not None:
         return Response(_result(data={
@@ -690,7 +702,7 @@ def constitution_test(request):
             timeout=90.0,
         )
         content = (completion.choices[0].message.content if completion.choices else "").strip() or "未能生成报告，请稍后重试。"
-        # 从报告中提取体质类型并写入 user_profile，供今日养生使用
+        # 从报告中提取体质类型并写入 user_profile，并清除今日养生缓存以按新体质重新生成
         constitution = _extract_constitution_from_report(content)
         if constitution:
             _save_user_constitution(user_id, constitution)

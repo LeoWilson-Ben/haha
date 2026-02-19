@@ -663,6 +663,11 @@ def update_profile(request):
     constitution = request.data.get("constitution")
     if constitution is not None:
         _save_user_constitution(user_id, constitution)
+        try:
+            from apps.fortune.views import invalidate_daily_health_cache
+            invalidate_daily_health_cache(user_id)
+        except Exception:
+            pass
     prof = _get_user_profile(user_id)
     return Response(_result(data={
         "nickname": user.nickname,
