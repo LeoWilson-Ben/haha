@@ -400,14 +400,49 @@ def _normalize_city_for_weather(loc):
     return s[:32] if s else None
 
 
+def _get_weather_wttr_in(city):
+    """备用：用 wttr.in 免费接口拉取天气，返回与 uapis 兼容的 dict（weather/temperature/city）或 None。"""
+    if not city:
+        return None
+    try:
+        import urllib.parse
+        import requests
+        url = "https://wttr.in/{}?format=j1".format(urllib.parse.quote(city))
+        r = requests.get(url, timeout=8, headers={"User-Agent": "curl/7.64.1"})
+        if r.status_code != 200:
+            return None
+        data = r.json()
+        cur = (data.get("current_condition") or [{}])[0]
+        temp = cur.get("temp_C")
+        if temp is not None and temp != "":
+            try:
+                temp = float(temp)
+            except (TypeError, ValueError):
+                temp = None
+        wd = cur.get("weatherDesc") or []
+        desc = wd[0].get("value", "") if (wd and isinstance(wd[0], dict)) else (wd[0] if wd else "")
+        area = (data.get("nearest_area") or [{}])[0]
+        an = area.get("areaName")
+        area_name = an[0].get("value", city) if (isinstance(an, list) and an and isinstance(an[0], dict)) else (an or city)
+        return {
+            "weather": (desc or "—").strip(),
+            "temperature": temp,
+            "city": (area_name or city).strip(),
+        }
+    except Exception as e:
+        logger.info("[今日养生] wttr.in 备用接口失败 city=%s: %s", city, e)
+        return None
+
+
 def _get_weather_for_location(city):
-    """调用 uapis.cn 天气接口，city 为城市名（如 武汉、北京）。返回天气信息 dict 或 None。"""
+    """获取当地天气：先试 uapis.cn，失败则用 wttr.in。返回 dict(weather, temperature, city) 或 None。"""
     if not city:
         return None
     city = _normalize_city_for_weather(city) or city
+    # 1) 先试 uapis.cn（与 weather_res.txt 一致用根域名）
     try:
         from uapi import UapiClient
-        client = UapiClient("https://uapis.cn/api/v1")
+        client = UapiClient("https://uapis.cn")
         result = client.misc.get_misc_weather(
             city=city,
             adcode="",
@@ -420,10 +455,10 @@ def _get_weather_for_location(city):
         )
         if result and isinstance(result, dict):
             return result
-        return None
     except Exception as e:
-        logger.info("[今日养生] 天气接口调用失败 city=%s: %s", city, e)
-        return None
+        logger.info("[今日养生] uapis 天气接口失败 city=%s: %s", city, e)
+    # 2) 备用：wttr.in（支持中文城市名，无需 key）
+    return _get_weather_wttr_in(city)
 
 
 @api_view(["GET"])
