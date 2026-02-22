@@ -383,9 +383,8 @@ def _get_weather_for_location(city):
         return None
     try:
         from uapi import UapiClient
-        from uapi.errors import UapiError
-        token = os.getenv("UAPI_TOKEN", "")
-        client = UapiClient("https://uapis.cn", token=token if token else None)
+        # uapis.cn 天气接口完全免费，无需鉴权
+        client = UapiClient("https://uapis.cn/api/v1")
         result = client.misc.get_misc_weather(
             city=city,
             adcode="",

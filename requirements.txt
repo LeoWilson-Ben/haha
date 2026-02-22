@@ -13,3 +13,6 @@ alibabacloud_tea_openapi>=0.3.0
 oss2>=2.18.0
 gunicorn>=21.0
 uapi-sdk-python>=0.1.5
+# 微信支付 V3、支付宝（充值功能，未配置 Pay.txt 时不影响其他功能）
+wechatpayv3>=1.2.50
+alipay-sdk-python>=3.7.0

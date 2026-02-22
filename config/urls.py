@@ -15,6 +15,7 @@ urlpatterns = [
     path("api/voice-match/", include("apps.voice_match.urls")),
     path("api/voice-room/", include("apps.voice_match.room_urls")),
     path("api/admin/", include("apps.admin_api.urls")),
+    path("api/pay/", include("apps.account.pay_urls")),
 ]
 if settings.DEBUG and settings.MEDIA_ROOT:
     urlpatterns += static(settings.MEDIA_URL, document_root=settings.MEDIA_ROOT)

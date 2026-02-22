@@ -1,0 +1,38 @@
+# 微信支付 & 支付宝 配置
+# 复制为 Pay.txt 并填入真实凭据。生产环境建议用环境变量覆盖敏感信息。
+# 路径：server/Pay.txt（与 Agora.txt 同级）
+
+# ========== 服务器公网地址（支付回调必须可外网访问）==========
+# 示例：https://your-domain.com 或 http://8.140.215.147:8000
+SERVER_BASE_URL=https://your-domain.com
+
+# ========== 微信支付 V3（APP 支付 / H5 支付）==========
+# 商户号：微信支付商户平台 -> 账户中心
+WECHAT_MCHID=
+# 应用 ID：微信公众平台/开放平台/小程序 的 AppID，需与商户号绑定
+WECHAT_APPID=
+# API v3 密钥：商户平台 -> 账户中心 -> API 安全 -> 设置 APIv3 密钥（32 位）
+WECHAT_APIV3_KEY=
+# 商户 API 证书序列号：商户平台 -> 账户中心 -> API 安全 -> 申请 API 证书，下载后从 apiclient_cert.pem 中查看
+# 可用命令获取：openssl x509 -in apiclient_cert.pem -noout -serial
+WECHAT_CERT_SERIAL_NO=
+# 商户私钥路径：apiclient_key.pem 的绝对路径，或相对于 server 目录的路径
+# 证书在商户平台下载，解压得到 apiclient_key.pem、apiclient_cert.pem、apiclient_cert.p12
+WECHAT_PRIVATE_KEY_PATH=server/certs/wechat_apiclient_key.pem
+#
+# 客户端：lib/core/constants/app_constants.dart 中需同步配置 wxAppId、wxUniversalLink（iOS）
+
+# ========== 支付宝（手机网站支付 H5）==========
+# 应用 ID：支付宝开放平台 -> 我的应用 -> 应用详情
+ALIPAY_APP_ID=
+# 应用私钥：RSA2 格式，PEM 内容（可填路径或直接粘贴，以 -----BEGIN 开头则视为 PEM 内容）
+# 生成：openssl genrsa -out app_private_key.pem 2048
+ALIPAY_APP_PRIVATE_KEY=
+# 支付宝公钥：开放平台 -> 开发设置 -> 接口加签方式 -> 支付宝公钥（非应用公钥）
+# 支持 PEM 格式（-----BEGIN PUBLIC KEY----- 开头）或纯 base64 字符串
+ALIPAY_PUBLIC_KEY=
+
+# ========== 可选：沙箱环境 ==========
+# 支付宝沙箱：设为 1 使用沙箱网关
+# ALIPAY_SANDBOX=0
+# 微信支付沙箱：需单独申请，此处不配置则用正式环境

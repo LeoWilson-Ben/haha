@@ -804,6 +804,76 @@ def wallet_log_list(request):
     return Response(_result(data={"list": items, "hasMore": len(items) == page_size}))
 
 
+@api_view(["POST"])
+def order_create(request):
+    """创建充值订单，返回 payUrl 供调起支付。body: { type, amount, payChannel }"""
+    from decimal import Decimal
+    from . import payment
+
+    user_id = _user_id_from_request(request)
+    if not user_id:
+        return Response(_result(401, "请先登录"), status=status.HTTP_401_UNAUTHORIZED)
+
+    order_type = (request.data.get("type") or "recharge").strip()
+    pay_channel = (request.data.get("payChannel") or request.data.get("pay_channel") or "wechat").strip().lower()
+    pay_mode = (request.data.get("payMode") or request.data.get("pay_mode") or "app").strip().lower()
+    if pay_channel not in ("wechat", "alipay"):
+        return Response(_result(400, "不支持的支付方式"), status=status.HTTP_400_BAD_REQUEST)
+
+    amount_raw = request.data.get("amount")
+    try:
+        amount_val = Decimal(str(amount_raw))
+    except (TypeError, ValueError):
+        return Response(_result(400, "金额无效"), status=status.HTTP_400_BAD_REQUEST)
+    if amount_val < Decimal("0.01"):
+        return Response(_result(400, "金额至少0.01元"), status=status.HTTP_400_BAD_REQUEST)
+    if amount_val > Decimal("10000"):
+        return Response(_result(400, "单笔最多10000元"), status=status.HTTP_400_BAD_REQUEST)
+
+    _ensure_wallet(user_id)
+
+    import time
+    order_no = f"R{int(time.time() * 1000)}{user_id % 10000:04d}"
+    subject = "玄语-余额充值"
+
+    from django.db import connection
+    with connection.cursor() as c:
+        c.execute(
+            """INSERT INTO order_main (order_no, user_id, type, amount, pay_channel, status, subject, created_at, updated_at)
+               VALUES (%s, %s, %s, %s, %s, 'pending', %s, NOW(), NOW())""",
+            [order_no, user_id, order_type, amount_val, pay_channel, subject],
+        )
+
+    cfg = payment._load_pay_config()
+    base_url = (cfg.get("SERVER_BASE_URL") or "").rstrip("/")
+    if not base_url:
+        return Response(_result(data={"orderNo": order_no, "payUrl": None, "message": "支付未配置，请联系管理员"}))
+
+    notify_url = f"{base_url}/api/pay/{pay_channel}/notify"
+    return_url = f"{base_url}/pay/return"
+
+    pay_result = None
+    use_app = pay_mode == "app"
+
+    if pay_channel == "wechat":
+        pay_result = payment.create_wechat_app_order(order_no, amount_val, subject, notify_url) if use_app else payment.create_wechat_h5_order(order_no, amount_val, subject, notify_url)
+        if use_app and (not pay_result or not pay_result.get("appId")):
+            pay_result = payment.create_wechat_h5_order(order_no, amount_val, subject, notify_url)
+    elif pay_channel == "alipay":
+        pay_result = payment.create_alipay_app_order(order_no, amount_val, subject, notify_url) if use_app else payment.create_alipay_wap_order(order_no, amount_val, subject, notify_url, return_url)
+        if use_app and (not pay_result or not pay_result.get("orderString")):
+            pay_result = payment.create_alipay_wap_order(order_no, amount_val, subject, notify_url, return_url)
+
+    if pay_result:
+        if pay_result.get("payUrl"):
+            return Response(_result(data={"orderNo": order_no, "payUrl": pay_result["payUrl"], "payMode": "h5"}))
+        if pay_result.get("appId"):  # 微信 APP 支付参数
+            return Response(_result(data={"orderNo": order_no, "payMode": "app", "wechatPayParams": pay_result}))
+        if pay_result.get("orderString"):  # 支付宝 APP 支付
+            return Response(_result(data={"orderNo": order_no, "payMode": "app", "alipayOrderString": pay_result["orderString"]}))
+    return Response(_result(data={"orderNo": order_no, "payUrl": None, "message": "创建支付单失败，请稍后重试"}))
+
+
 @api_view(["GET"])
 def order_list(request):
     """订单列表"""
