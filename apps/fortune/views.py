@@ -370,6 +370,21 @@ def _get_user_location_for_health(user_id, request):
     return (loc or "").replace(" ", "").strip()[:32] or None
 
 
+def _weather_summary_from_dict(weather):
+    """从天气 API 返回的 dict 拼出前端可直接展示的字符串，如「北京：晴，18℃」。"""
+    if not weather or not isinstance(weather, dict):
+        return ""
+    w = (weather.get("weather") or "").strip()
+    t = weather.get("temperature")
+    temp_str = f"{int(t)}℃" if t is not None and isinstance(t, (int, float)) and t == int(t) else (f"{t}℃" if t is not None else "")
+    parts = [p for p in (w, temp_str) if p]
+    if not parts:
+        return ""
+    summary = "，".join(parts)
+    city = (weather.get("city") or "").strip()
+    return f"{city}：{summary}" if city else summary
+
+
 def _get_weather_for_location(city):
     """调用 uapis.cn 天气接口，city 为去空格后的地址（如 郑州市、河南省郑州市）。返回天气信息 dict 或 None。"""
     if not city:
@@ -439,18 +454,23 @@ def daily_health(request):
     cached = cache.get(cache_key)
     if cached is not None:
         if isinstance(cached, dict):
+            c_weather = cached.get("weather")
+            c_summary = cached.get("weatherSummary") or _weather_summary_from_dict(c_weather)
             return Response(_result(data={
                 "content": cached.get("content", ""),
                 "date": today_str,
                 "constitution": constitution,
                 "solarTerm": solar_term,
-                "weather": cached.get("weather"),
+                "weather": c_weather,
+                "weatherSummary": c_summary or "",
             }))
         return Response(_result(data={
             "content": cached,
             "date": today_str,
             "constitution": constitution,
             "solarTerm": solar_term,
+            "weather": None,
+            "weatherSummary": "",
         }))
 
     today_fmt = today.strftime("%Y年%m月%d日")
@@ -475,13 +495,15 @@ def daily_health(request):
             timeout=60.0,
         )
         content = (completion.choices[0].message.content if completion.choices else "").strip() or f"今日{solar_term}，宜清淡饮食、规律作息。"
-        cache.set(cache_key, {"content": content, "weather": weather}, timeout=HEALTH_CACHE_TTL)
+        weather_summary = weather_str or ""
+        cache.set(cache_key, {"content": content, "weather": weather, "weatherSummary": weather_summary}, timeout=HEALTH_CACHE_TTL)
         return Response(_result(data={
             "content": content,
             "date": today_str,
             "constitution": constitution,
             "solarTerm": solar_term,
             "weather": weather,
+            "weatherSummary": weather_summary,
         }))
     except Exception as e:
         logger.exception("今日养生生成失败")
@@ -492,6 +514,7 @@ def daily_health(request):
             "constitution": constitution,
             "solarTerm": solar_term,
             "weather": weather,
+            "weatherSummary": weather_str or "",
         }))
 
 
