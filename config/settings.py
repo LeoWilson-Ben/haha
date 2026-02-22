@@ -129,3 +129,36 @@ ALIYUN_OSS_SIGNED_URL_EXPIRES = int(os.environ.get("ALIYUN_OSS_SIGNED_URL_EXPIRE
 
 # 管理后台 API 鉴权：请求头 X-Admin-Token 需与此一致；不设置时仅 DEBUG 下允许访问
 ADMIN_API_KEY = os.environ.get("ADMIN_API_KEY", "")
+
+# 日志：apps.fortune（今日养生等）的 INFO 写入文件，gunicorn 下可 tail -f 查看
+_log_fortune_dir = BASE_DIR / "logs"
+_fortune_log_file = "/tmp/fortune.log"
+try:
+    _log_fortune_dir.mkdir(parents=True, exist_ok=True)
+    _fortune_log_file = str(_log_fortune_dir / "fortune.log")
+except Exception:
+    pass  # 用 /tmp/fortune.log
+
+LOGGING = {
+    "version": 1,
+    "disable_existing_loggers": False,
+    "formatters": {
+        "fortune": {"format": "%(asctime)s [%(levelname)s] %(message)s"},
+    },
+    "handlers": {
+        "console": {"class": "logging.StreamHandler"},
+        "fortune_file": {
+            "class": "logging.FileHandler",
+            "filename": _fortune_log_file,
+            "encoding": "utf-8",
+            "formatter": "fortune",
+        },
+    },
+    "loggers": {
+        "apps.fortune.views": {
+            "level": "INFO",
+            "handlers": ["console", "fortune_file"],
+            "propagate": False,
+        },
+    },
+}
