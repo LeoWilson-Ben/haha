@@ -53,6 +53,17 @@ def _get_ai_prompt(key, default="", **replacements):
         return default
 
 
+# 豆包 ARK：统一使用 Doubao-Seed-1.6-flash，环境变量 ARK_API_KEY 优先
+ARK_API_KEY = os.getenv("ARK_API_KEY", "e8c3c4e5-0a31-4690-8e79-3fc86b12061b")
+ARK_BASE_URL = "https://ark.cn-beijing.volces.com/api/v3"
+LLM_MODEL = "doubao-seed-1-6-flash-250828"
+
+
+def _get_llm_client():
+    from openai import OpenAI
+    return OpenAI(api_key=ARK_API_KEY, base_url=ARK_BASE_URL)
+
+
 @api_view(["POST"])
 @permission_classes([AllowAny])
 def bazi_paipan(request):
@@ -119,13 +130,9 @@ def _compute_xiyongshen(birth_date, birth_time):
 请仅返回 JSON，格式为：{{"喜神":"金|木|水|火|土","用神":"金|木|水|火|土"}}
 五行只能为：金、木、水、火、土 之一。不要其他内容。"""
     try:
-        from openai import OpenAI
-        client = OpenAI(
-            api_key=os.getenv("DASHSCOPE_API_KEY", "sk-0c014d6601794c9dbb248ea6892dcd55"),
-            base_url="https://dashscope.aliyuncs.com/compatible-mode/v1",
-        )
+        client = _get_llm_client()
         completion = client.chat.completions.create(
-            model="qwen-plus",
+            model=LLM_MODEL,
             messages=[
                 {"role": "system", "content": "你是八字命理师，根据出生信息计算喜用神，五行仅限金木水火土，只输出 JSON。"},
                 {"role": "user", "content": prompt},
@@ -252,13 +259,9 @@ def today_fortune(request):
 请用简洁、温馨的语气，从事业、感情、健康、财运等方面给出 2-3 句运势建议，控制在 150 字以内。"""
     prompt = _get_ai_prompt("daily_fortune", default_prompt, today=today, birth_date=birth_date, birth_time=birth_time or "未知")
     try:
-        from openai import OpenAI
-        client = OpenAI(
-            api_key=os.getenv("DASHSCOPE_API_KEY", "sk-0c014d6601794c9dbb248ea6892dcd55"),
-            base_url="https://dashscope.aliyuncs.com/compatible-mode/v1",
-        )
+        client = _get_llm_client()
         completion = client.chat.completions.create(
-            model="qwen-plus",
+            model=LLM_MODEL,
             messages=[
                 {"role": "system", "content": "你是传统文化命理师，用简洁温和的语气回答问题。"},
                 {"role": "user", "content": prompt},
@@ -473,13 +476,9 @@ def daily_health(request):
         today_fmt=today_fmt, constitution=constitution, solar_term=solar_term, weather=weather_str,
     )
     try:
-        from openai import OpenAI
-        client = OpenAI(
-            api_key=os.getenv("DASHSCOPE_API_KEY", "sk-0c014d6601794c9dbb248ea6892dcd55"),
-            base_url="https://dashscope.aliyuncs.com/compatible-mode/v1",
-        )
+        client = _get_llm_client()
         completion = client.chat.completions.create(
-            model="qwen-plus",
+            model=LLM_MODEL,
             messages=[
                 {"role": "system", "content": "你是中医养生专家，用简洁亲切的语气给出饮食建议。"},
                 {"role": "user", "content": prompt},
@@ -547,13 +546,9 @@ def fengshui_analyze(request):
     prompt = _get_ai_prompt("fengshui_image", default_prompt)
 
     try:
-        from openai import OpenAI
-        client = OpenAI(
-            api_key=os.getenv("DASHSCOPE_API_KEY", "sk-0c014d6601794c9dbb248ea6892dcd55"),
-            base_url="https://dashscope.aliyuncs.com/compatible-mode/v1",
-        )
+        client = _get_llm_client()
         completion = client.chat.completions.create(
-            model="qwen-vl-plus",
+            model=LLM_MODEL,
             messages=[
                 {
                     "role": "user",
@@ -607,13 +602,9 @@ def fengshui_item_analyze(request):
 用专业且通俗的语气，直接给出结论。"""
     prompt = _get_ai_prompt("fengshui_item", default_prompt, direction=direction, item_name=item_name)
     try:
-        from openai import OpenAI
-        client = OpenAI(
-            api_key=os.getenv("DASHSCOPE_API_KEY", "sk-0c014d6601794c9dbb248ea6892dcd55"),
-            base_url="https://dashscope.aliyuncs.com/compatible-mode/v1",
-        )
+        client = _get_llm_client()
         completion = client.chat.completions.create(
-            model="qwen-plus",
+            model=LLM_MODEL,
             messages=[
                 {"role": "system", "content": "你是传统文化风水师，用简洁专业的口吻回答问题。"},
                 {"role": "user", "content": prompt},
@@ -760,13 +751,9 @@ def constitution_test(request):
     prompt = _get_ai_prompt("constitution_test", default_prompt, gender=gender, age=age, qa_text=qa_text)
 
     try:
-        from openai import OpenAI
-        client = OpenAI(
-            api_key=os.getenv("DASHSCOPE_API_KEY", "sk-0c014d6601794c9dbb248ea6892dcd55"),
-            base_url="https://dashscope.aliyuncs.com/compatible-mode/v1",
-        )
+        client = _get_llm_client()
         completion = client.chat.completions.create(
-            model="qwen-vl-plus",
+            model=LLM_MODEL,
             messages=[
                 {
                     "role": "user",
@@ -994,13 +981,9 @@ def ai_master_chat(request):
         llm_messages.append({"role": h["role"], "content": h["content"]})
 
     try:
-        from openai import OpenAI
-        client = OpenAI(
-            api_key=os.getenv("DASHSCOPE_API_KEY", "sk-0c014d6601794c9dbb248ea6892dcd55"),
-            base_url="https://dashscope.aliyuncs.com/compatible-mode/v1",
-        )
+        client = _get_llm_client()
         completion = client.chat.completions.create(
-            model="qwen-plus",
+            model=LLM_MODEL,
             messages=llm_messages,
             timeout=60.0,
         )
