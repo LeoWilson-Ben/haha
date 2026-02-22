@@ -459,7 +459,7 @@ def post_set_status(request, post_id):
 @api_view(["GET"])
 @admin_api_required
 def report_list(request):
-    """举报列表，支持 status=pending|handled"""
+    """举报列表，支持 status=pending|handled；返回举报人、被举报人（帖子作者或用户）"""
     status_filter = (request.GET.get("status") or "pending").strip().lower()
     if status_filter not in ("pending", "handled"):
         status_filter = "pending"
@@ -469,15 +469,38 @@ def report_list(request):
     qs = Report.objects.filter(status=status_filter).order_by("-id")[start : start + page_size]
     reporter_ids = list({r.reporter_id for r in qs})
     users = {u.id: u for u in User.objects.filter(id__in=reporter_ids)} if reporter_ids else {}
+
+    # 被举报人：帖子举报为帖子作者，用户举报为被举报用户
+    target_user_ids = set()
+    post_id_to_user = {}
+    post_ids = [r.target_id for r in qs if (r.target_type or "").strip().lower() == "post"]
+    if post_ids:
+        for row in Post.objects.filter(id__in=post_ids).values_list("id", "user_id"):
+            post_id_to_user[row[0]] = row[1]
+            target_user_ids.add(row[1])
+    for r in qs:
+        if (r.target_type or "").strip().lower() == "user":
+            target_user_ids.add(r.target_id)
+    target_users = {u.id: u for u in User.objects.filter(id__in=target_user_ids)} if target_user_ids else {}
+
     items = []
     for r in qs:
         u = users.get(r.reporter_id)
+        target_uid = None
+        if (r.target_type or "").strip().lower() == "user":
+            target_uid = r.target_id
+        elif (r.target_type or "").strip().lower() == "post":
+            target_uid = post_id_to_user.get(r.target_id)
+        target_user = target_users.get(target_uid) if target_uid else None
+        target_nickname = (getattr(target_user, "nickname", None) or (f"用户{target_uid}" if target_uid else "")) if target_user or target_uid else "-"
         items.append({
             "id": r.id,
             "reporterId": r.reporter_id,
             "reporterNickname": getattr(u, "nickname", None) or f"用户{r.reporter_id}",
             "targetType": r.target_type,
             "targetId": r.target_id,
+            "targetUserId": target_uid,
+            "targetNickname": target_nickname,
             "reason": r.reason or "",
             "status": r.status,
             "handleResult": r.handle_result or "",
@@ -597,12 +620,12 @@ def withdraw_reject(request, withdraw_id):
 @api_view(["GET"])
 @admin_api_required
 def user_list(request):
-    """用户列表，keyword 搜手机号/昵称"""
+    """用户列表，keyword 搜手机号/昵称。已注销用户（mobile 以 deleted_ 开头）不展示"""
     keyword = (request.GET.get("keyword") or "").strip()[:50]
     page = max(1, int(request.GET.get("page") or 1))
     page_size = min(50, max(1, int(request.GET.get("page_size") or 20)))
     start = (page - 1) * page_size
-    qs = User.objects.all().order_by("-id")
+    qs = User.objects.all().exclude(mobile__startswith="deleted_").order_by("-id")
     if keyword:
         from django.db.models import Q
         qs = qs.filter(Q(mobile__icontains=keyword) | Q(nickname__icontains=keyword))
