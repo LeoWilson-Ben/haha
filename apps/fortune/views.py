@@ -528,12 +528,13 @@ def daily_health(request):
     city = _get_user_location_for_health(user_id, request)
     logger.info("[今日养生] IP 属地 city=%s (None 表示本地/内网/未知或解析失败)", city)
     city_key = _normalize_city_for_weather(city) if city else None
+    # 天气默认用数据库（按日按城市一份）；数据库没有再请求接口并写入库
     weather = _get_weather_from_db(today, city_key) if city_key else None
     if weather is None and city_key:
         weather = _get_weather_for_location(city)
         if weather:
             _save_weather_to_db(today, city_key, weather)
-    logger.info("[今日养生] 天气 API 结果: %s", "有" if weather else "None")
+    logger.info("[今日养生] 天气: %s", "有" if weather else "无")
     # 今日养生仅使用 API 返回的 weather（天气状况）与 temperature（当前温度 °C）
     weather_str = ""
     if weather:
@@ -711,22 +712,18 @@ def fengshui_item_analyze(request):
     if direction not in valid_directions:
         return Response(_result(400, "无效方位"), status=status.HTTP_400_BAD_REQUEST)
 
-    default_prompt = f"""你是一位传统文化风水师。用户询问在【{direction}】方位放置【{item_name}】的吉凶。
-
-请简要回答（控制在 100 字以内）：
-1. 吉凶结论（吉/凶/平，或大吉/小吉/平/小凶/大凶）
-2. 简要理由（1-2 句）
-用专业且通俗的语气，直接给出结论。"""
+    default_prompt = f"""【{direction}】方位放【{item_name}】的吉凶？用一句话：先给结论（大吉/吉/平/小凶/凶/大凶），再一句理由。"""
     prompt = _get_ai_prompt("fengshui_item", default_prompt, direction=direction, item_name=item_name)
     try:
         client = _get_llm_client()
         completion = client.chat.completions.create(
             model=LLM_MODEL,
             messages=[
-                {"role": "system", "content": "你是传统文化风水师，用简洁专业的口吻回答问题。"},
+                {"role": "system", "content": "风水师，一句话给吉凶结论+理由。"},
                 {"role": "user", "content": prompt},
             ],
-            timeout=30.0,
+            max_tokens=120,
+            timeout=15.0,
         )
         content = (completion.choices[0].message.content if completion.choices else "").strip() or "宜根据实际格局综合判断。"
         fortune = "平"
