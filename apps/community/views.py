@@ -13,7 +13,7 @@ from rest_framework.response import Response
 from apps.account.models import User
 from apps.account.session_store import get_user_id_by_token
 from apps.system.views import get_ip_location_for_request
-from .models import Topic, Post, Comment, PostLike, PostFavorite, UserFollow, Report, Notification
+from .models import Topic, Post, Comment, PostLike, PostFavorite, UserFollow, Report, Notification, SystemNotification
 
 
 def _result(code=0, message="success", data=None):
@@ -985,12 +985,13 @@ def notification_list(request):
 @api_view(["GET"])
 @permission_classes([AllowAny])
 def notification_unread_count(request):
-    """互动通知未读数量，用于信息页角标"""
+    """互动+系统通知未读数量，用于消息页角标"""
     user_id = _user_id_from_request(request)
     if not user_id:
         return Response(_result(data={"unreadCount": 0}))
-    count = Notification.objects.filter(user_id=user_id, read=0).count()
-    return Response(_result(data={"unreadCount": count}))
+    interaction = Notification.objects.filter(user_id=user_id, read=0).count()
+    system_count = SystemNotification.objects.filter(user_id=user_id, read=0).count()
+    return Response(_result(data={"unreadCount": interaction + system_count}))
 
 
 @api_view(["POST"])
@@ -1011,6 +1012,59 @@ def notification_mark_read(request):
         Notification.objects.filter(user_id=user_id, id__in=ids).update(read=1)
     else:
         Notification.objects.filter(user_id=user_id).update(read=1)
+    return Response(_result())
+
+
+# ---------- 系统通知（公告、帖子下架等） ----------
+@api_view(["GET"])
+@permission_classes([AllowAny])
+def system_notification_list(request):
+    """系统通知列表，分页"""
+    user_id = _user_id_from_request(request)
+    if not user_id:
+        return Response(_result(401, "请先登录"), status=status.HTTP_401_UNAUTHORIZED)
+    page = max(1, int(request.GET.get("page") or 1))
+    page_size = min(50, max(1, int(request.GET.get("page_size") or 20)))
+    qs = SystemNotification.objects.filter(user_id=user_id).order_by("-created_at")
+    start = (page - 1) * page_size
+    rows = list(qs[start : start + page_size])
+    type_text = {"announcement": "平台公告", "post_removed": "帖子下架"}
+    items = []
+    for n in rows:
+        items.append({
+            "id": n.id,
+            "type": n.type,
+            "typeText": type_text.get(n.type, n.type),
+            "title": n.title or "",
+            "content": n.content or "",
+            "extraJson": n.extra_json,
+            "read": bool(n.read),
+            "createdAt": n.created_at.isoformat() if n.created_at else None,
+        })
+    return Response(_result(data={
+        "list": items,
+        "hasMore": len(rows) == page_size,
+    }))
+
+
+@api_view(["POST"])
+@permission_classes([AllowAny])
+def system_notification_mark_read(request):
+    """标记系统通知已读。body: { "ids": [1,2] } 若为空则全部标已读"""
+    user_id = _user_id_from_request(request)
+    if not user_id:
+        return Response(_result(401, "请先登录"), status=status.HTTP_401_UNAUTHORIZED)
+    ids = request.data.get("ids") or []
+    if isinstance(ids, str):
+        try:
+            ids = json.loads(ids)
+        except Exception:
+            ids = []
+    ids = [int(x) for x in ids if x is not None]
+    if ids:
+        SystemNotification.objects.filter(user_id=user_id, id__in=ids).update(read=1)
+    else:
+        SystemNotification.objects.filter(user_id=user_id).update(read=1)
     return Response(_result())
 
 

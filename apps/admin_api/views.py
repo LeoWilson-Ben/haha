@@ -13,8 +13,37 @@ from rest_framework.response import Response
 
 from .auth import admin_api_required, _result
 from apps.account.models import User, WithdrawApply
-from apps.community.models import Post, Report
+from apps.community.models import Post, Report, SystemNotification
 from apps.system.models import Announcement
+
+
+def _send_announcement_system_notification(announcement):
+    """公告上架时给全量用户插入一条系统通知（分批，每批 500）"""
+    try:
+        user_ids = list(
+            User.objects.exclude(mobile__startswith="deleted_").values_list("id", flat=True)
+        )
+        title = (announcement.title or "平台公告")[:255]
+        content = (announcement.content or "")[:2000]
+        extra = json.dumps(
+            {"announcementId": announcement.id, "linkUrl": (announcement.link_url or "") or None},
+            ensure_ascii=False,
+        )[:1024]
+        batch = 500
+        for i in range(0, len(user_ids), batch):
+            chunk = user_ids[i : i + batch]
+            SystemNotification.objects.bulk_create([
+                SystemNotification(
+                    user_id=uid,
+                    type="announcement",
+                    title=title,
+                    content=content,
+                    extra_json=extra,
+                )
+                for uid in chunk
+            ])
+    except Exception:
+        pass
 
 
 # ---------- 核心数据看板（替代原仪表盘） ----------
@@ -530,7 +559,17 @@ def report_handle(request, report_id):
             handled_at=timezone.now(),
         )
         if punish_post and r.target_type == "post":
-            Post.objects.filter(id=r.target_id).update(status=0)
+            p = Post.objects.filter(id=r.target_id).first()
+            if p:
+                Post.objects.filter(id=r.target_id).update(status=0)
+                extra = json.dumps({"postId": p.id}, ensure_ascii=False)
+                SystemNotification.objects.create(
+                    user_id=p.user_id,
+                    type="post_removed",
+                    title="您的帖子已被下架",
+                    content=handle_result or "因违反社区规范，您的帖子已被下架。如有疑问请联系客服。",
+                    extra_json=extra,
+                )
         if punish_user:
             uid = r.target_id if r.target_type == "user" else None
             if uid is None and r.target_type == "post":
@@ -899,6 +938,8 @@ def announcement_create(request):
             start_at=start_at,
             end_at=end_at,
         )
+        if status_int == 1:
+            _send_announcement_system_notification(a)
         return Response(_result(data={"id": a.id, "message": "已创建"}))
     except Exception as e:
         return Response(_result(500, str(e)), status=status.HTTP_500_INTERNAL_SERVER_ERROR)
@@ -989,6 +1030,8 @@ def announcement_set_status(request, announcement_id):
         if not a:
             return Response(_result(404, "公告不存在"), status=status.HTTP_404_NOT_FOUND)
         Announcement.objects.filter(id=announcement_id).update(status=s)
+        if s == 1:
+            _send_announcement_system_notification(a)
         return Response(_result(data={"message": "已下架" if s == 0 else "已上架"}))
     except Exception as e:
         return Response(_result(500, str(e)), status=status.HTTP_500_INTERNAL_SERVER_ERROR)

@@ -102,6 +102,21 @@ class Notification(models.Model):
         managed = False
 
 
+class SystemNotification(models.Model):
+    """系统通知：公告、帖子下架等，在消息-通知中展示"""
+    user_id = models.BigIntegerField()
+    type = models.CharField(max_length=32)  # announcement / post_removed
+    title = models.CharField(max_length=255)
+    content = models.TextField(null=True, blank=True)
+    extra_json = models.CharField(max_length=1024, null=True, blank=True)
+    read = models.SmallIntegerField(default=0)
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        db_table = "system_notification"
+        managed = False
+
+
 class Report(models.Model):
     id = models.BigAutoField(primary_key=True)
     reporter_id = models.BigIntegerField()
