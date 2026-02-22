@@ -365,6 +365,7 @@ def _get_user_location_for_health(user_id, request):
     """获取用户定位，仅根据请求 IP 解析属地，用于今日养生天气。返回城市名或 None（本地/内网/未知时无效）。"""
     from apps.system.views import get_ip_location_for_request
     loc = get_ip_location_for_request(request)
+    logger.info("[今日养生] get_ip_location 原始 loc=%r", loc)
     if not loc or loc in ("本地", "内网", "未知"):
         return None
     return (loc or "").replace(" ", "").strip()[:32] or None
@@ -433,7 +434,9 @@ def daily_health(request):
         solar_term = "立春"  # fallback
 
     city = _get_user_location_for_health(user_id, request)
+    logger.info("[今日养生] IP 属地 city=%s (None 表示本地/内网/未知或解析失败)", city)
     weather = _get_weather_for_location(city) if city else None
+    logger.info("[今日养生] 天气 API 结果: %s", "有" if weather else "None")
     # 今日养生仅使用 API 返回的 weather（天气状况）与 temperature（当前温度 °C）
     weather_str = ""
     if weather:
@@ -448,6 +451,7 @@ def daily_health(request):
             weather_str = "，".join(parts)
             if weather.get("city"):
                 weather_str = f"{weather['city']}：{weather_str}"
+    logger.info("[今日养生] weather_str=%r", weather_str or "(空)")
 
     # 缓存 key 包含体质和定位，体质/地址变更后自动用新 key
     cache_key = f"{HEALTH_CACHE_PREFIX}{user_id}:{today_str}:{constitution}:{city or 'default'}"
