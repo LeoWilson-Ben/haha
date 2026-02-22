@@ -387,23 +387,21 @@ def _weather_summary_from_dict(weather):
 
 
 def _normalize_city_for_weather(loc):
-    """将 IP 属地转为天气 API 常用城市名。如 湖北省武汉市 -> 武汉市，河南省郑州市 -> 郑州市。"""
+    """将 IP 属地转为 uapis 天气 API 城市名：去省前缀、去末尾「市」。如 湖北省武汉市 -> 武汉（与 weather_res 示例 city=北京 一致）。"""
     if not loc or not isinstance(loc, str):
         return loc
     s = loc.replace(" ", "").strip()
-    # 去掉省前缀，只保留「XX市」或「XX」，多数天气 API 认城市名
     if "省" in s:
         s = s.split("省", 1)[-1].strip()
     if "自治区" in s:
         s = s.split("自治区", 1)[-1].strip()
-    if "市" in s and not s.endswith("市"):
-        # 如 北京朝阳 -> 取含市的部分或整段
-        pass
+    if s.endswith("市"):
+        s = s[:-1]  # 武汉市 -> 武汉，北京市 -> 北京
     return s[:32] if s else None
 
 
 def _get_weather_for_location(city):
-    """调用 uapis.cn 天气接口，city 为城市名（如 武汉市、北京）。返回天气信息 dict 或 None。"""
+    """调用 uapis.cn 天气接口，city 为城市名（如 武汉、北京）。返回天气信息 dict 或 None。"""
     if not city:
         return None
     city = _normalize_city_for_weather(city) or city
