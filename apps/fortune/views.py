@@ -362,19 +362,9 @@ def invalidate_daily_health_cache(user_id):
 
 
 def _get_user_location_for_health(user_id, request):
-    """获取用户定位（IP 定位地址），用于天气查询。优先用 user_profile.region_code，否则用请求 IP 属地。返回去空格后的城市名。"""
-    loc = None
-    try:
-        with connection.cursor() as c:
-            c.execute("SELECT region_code FROM user_profile WHERE user_id = %s", [user_id])
-            row = c.fetchone()
-        if row and row[0] and str(row[0]).strip():
-            loc = str(row[0]).strip()
-    except Exception:
-        pass
-    if not loc:
-        from apps.system.views import get_ip_location_for_request
-        loc = get_ip_location_for_request(request)
+    """获取用户定位，仅根据请求 IP 解析属地，用于今日养生天气。返回城市名或 None（本地/内网/未知时无效）。"""
+    from apps.system.views import get_ip_location_for_request
+    loc = get_ip_location_for_request(request)
     if not loc or loc in ("本地", "内网", "未知"):
         return None
     return (loc or "").replace(" ", "").strip()[:32] or None
