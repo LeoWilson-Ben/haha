@@ -879,9 +879,9 @@ def announcement_list(request):
             "linkUrl": a.link_url or "",
             "status": a.status,
             "sortOrder": a.sort_order,
-            "startAt": a.start_at.isoformat() if a.start_at else None,
-            "endAt": a.end_at.isoformat() if a.end_at else None,
-            "createdAt": a.created_at.isoformat() if a.created_at else None,
+            "startAt": timezone.localtime(a.start_at).isoformat() if a.start_at else None,
+            "endAt": timezone.localtime(a.end_at).isoformat() if a.end_at else None,
+            "createdAt": timezone.localtime(a.created_at).isoformat() if a.created_at else None,
         })
     return Response(_result(data={"list": out, "total": total, "hasMore": len(items) == page_size}))
 
@@ -970,9 +970,9 @@ def announcement_get(request, announcement_id):
         "linkUrl": a.link_url or "",
         "status": a.status,
         "sortOrder": a.sort_order,
-        "startAt": a.start_at.isoformat() if a.start_at else None,
-        "endAt": a.end_at.isoformat() if a.end_at else None,
-        "createdAt": a.created_at.isoformat() if a.created_at else None,
+        "startAt": timezone.localtime(a.start_at).isoformat() if a.start_at else None,
+        "endAt": timezone.localtime(a.end_at).isoformat() if a.end_at else None,
+        "createdAt": timezone.localtime(a.created_at).isoformat() if a.created_at else None,
     }))
 
 
