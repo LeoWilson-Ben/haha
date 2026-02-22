@@ -622,10 +622,11 @@ def fengshui_item_analyze(request):
         )
         content = (completion.choices[0].message.content if completion.choices else "").strip() or "宜根据实际格局综合判断。"
         fortune = "平"
-        if any(x in content for x in ("大凶", "凶", "忌", "不宜")):
-            fortune = "凶"
-        elif any(x in content for x in ("大吉", "吉", "宜", "好")):
+        # 先判断吉再判断凶，避免回复中「不宜」「忌」等补充说明覆盖结论（如「吉，但不宜过多」）
+        if any(x in content for x in ("大吉", "吉", "宜", "好")):
             fortune = "吉"
+        elif any(x in content for x in ("大凶", "凶", "忌", "不宜")):
+            fortune = "凶"
         return Response(_result(data={"fortune": fortune, "description": content}))
     except Exception as e:
         logger.exception("物品吉凶分析失败")
