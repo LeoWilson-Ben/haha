@@ -380,35 +380,13 @@ def _get_user_location_for_health(user_id, request):
     return (loc or "").replace(" ", "").strip()[:32] or None
 
 
-def _normalize_weather(raw):
-    """将 uapis 等接口返回的多种格式统一为前端与提示词使用的结构：weather, temperature, wind_direction, wind_power, humidity, city。"""
-    if not raw or not isinstance(raw, dict):
-        return None
-    out = {}
-    # 支持顶层或 realtime 嵌套
-    realtime = raw.get("realtime") if isinstance(raw.get("realtime"), dict) else raw
-    out["city"] = raw.get("city") or raw.get("area") or raw.get("region") or ""
-    out["weather"] = (
-        realtime.get("weather") or realtime.get("text") or realtime.get("condition")
-        or raw.get("weather") or raw.get("text")
-    )
-    t = realtime.get("temp") if realtime.get("temp") is not None else realtime.get("temperature")
-    if t is not None:
-        out["temperature"] = int(t) if isinstance(t, (int, float)) else t
-    elif raw.get("temperature") is not None:
-        out["temperature"] = raw["temperature"]
-    out["wind_direction"] = realtime.get("wind_direction") or realtime.get("windDir") or raw.get("wind_direction") or ""
-    out["wind_power"] = realtime.get("wind_power") or realtime.get("windClass") or raw.get("wind_power") or ""
-    out["humidity"] = realtime.get("humidity") if realtime.get("humidity") is not None else raw.get("humidity")
-    return out if (out.get("weather") or out.get("temperature") is not None) else None
-
-
 def _get_weather_for_location(city):
-    """调用 uapis.cn 天气接口，city 为去空格后的地址（如 郑州市、河南省郑州市）。返回统一结构的天气 dict 或 None。"""
+    """调用 uapis.cn 天气接口，city 为去空格后的地址（如 郑州市、河南省郑州市）。返回天气信息 dict 或 None。"""
     if not city:
         return None
     try:
         from uapi import UapiClient
+        # uapis.cn 天气接口完全免费，无需鉴权
         client = UapiClient("https://uapis.cn/api/v1")
         result = client.misc.get_misc_weather(
             city=city,
@@ -421,7 +399,7 @@ def _get_weather_for_location(city):
             lang="zh",
         )
         if result and isinstance(result, dict):
-            return _normalize_weather(result)
+            return result
         return None
     except Exception as e:
         logger.debug("天气接口调用失败 city=%s: %s", city, e)
@@ -450,22 +428,19 @@ def daily_health(request):
         solar_term = "立春"  # fallback
 
     city = _get_user_location_for_health(user_id, request)
-    if not city and os.getenv("HEALTH_FALLBACK_CITY"):
-        city = os.getenv("HEALTH_FALLBACK_CITY", "").strip()[:32] or None
     weather = _get_weather_for_location(city) if city else None
+    # 今日养生仅使用 API 返回的 weather（天气状况）与 temperature（当前温度 °C）
     weather_str = ""
     if weather:
-        parts = []
-        if weather.get("weather"):
-            parts.append(weather["weather"])
-        if weather.get("temperature") is not None:
-            parts.append(f"{weather['temperature']}℃")
-        if weather.get("wind_direction") or weather.get("wind_power"):
-            parts.append((weather.get("wind_direction") or "") + (weather.get("wind_power") or ""))
-        if weather.get("humidity") is not None:
-            parts.append(f"湿度{weather['humidity']}%")
+        w = weather.get("weather") or ""
+        t = weather.get("temperature")
+        if t is not None:
+            temp_str = f"{int(t)}℃" if isinstance(t, (int, float)) and t == int(t) else f"{t}℃"
+        else:
+            temp_str = ""
+        parts = [p for p in (w, temp_str) if p]
         if parts:
-            weather_str = "，".join(str(p) for p in parts)
+            weather_str = "，".join(parts)
             if weather.get("city"):
                 weather_str = f"{weather['city']}：{weather_str}"
 
@@ -486,7 +461,6 @@ def daily_health(request):
             "date": today_str,
             "constitution": constitution,
             "solarTerm": solar_term,
-            "weather": None,
         }))
 
     today_fmt = today.strftime("%Y年%m月%d日")
@@ -500,9 +474,6 @@ def daily_health(request):
         "daily_health", default_prompt,
         today_fmt=today_fmt, constitution=constitution, solar_term=solar_term, weather=weather_str,
     )
-    # 若数据库模板里没有 {weather}，但本次有天气，则把天气块追加到提示词中，确保模型能看到
-    if weather_str and "当地天气" not in prompt and "【当地天气】" not in prompt:
-        prompt = prompt.rstrip() + f"\n【当地天气】{weather_str}\n"
     try:
         client = _get_llm_client()
         completion = client.chat.completions.create(
