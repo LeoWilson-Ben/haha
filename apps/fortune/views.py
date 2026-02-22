@@ -556,22 +556,26 @@ def daily_health(request):
     if cached is not None:
         if isinstance(cached, dict):
             c_weather = cached.get("weather")
-            c_summary = cached.get("weatherSummary") or _weather_summary_from_dict(c_weather)
+            c_summary = (cached.get("weatherSummary") or _weather_summary_from_dict(c_weather) or "").strip()
+            # 本次请求有天气就优先用本次的，避免旧缓存或不同请求导致前端不显示
+            out_weather = weather if weather else c_weather
+            out_summary = (weather_str or "").strip() or c_summary or ""
             return Response(_result(data={
                 "content": cached.get("content", ""),
                 "date": today_str,
                 "constitution": constitution,
                 "solarTerm": solar_term,
-                "weather": c_weather,
-                "weatherSummary": c_summary or "",
+                "weather": out_weather,
+                "weatherSummary": out_summary,
             }))
+        # 旧格式缓存（只有 content 字符串）：用本次天气补上
         return Response(_result(data={
             "content": cached,
             "date": today_str,
             "constitution": constitution,
             "solarTerm": solar_term,
-            "weather": None,
-            "weatherSummary": "",
+            "weather": weather,
+            "weatherSummary": weather_str or "",
         }))
 
     today_fmt = today.strftime("%Y年%m月%d日")
