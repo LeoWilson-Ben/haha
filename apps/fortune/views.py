@@ -434,6 +434,49 @@ def _get_weather_wttr_in(city):
         return None
 
 
+def _get_weather_from_db(cache_date, city_key):
+    """从数据库读取当日该城市的天气缓存，city_key 为归一化城市名（如 武汉）。返回 dict(weather, temperature, city) 或 None。"""
+    if not city_key or not cache_date:
+        return None
+    try:
+        with connection.cursor() as c:
+            c.execute(
+                "SELECT weather, temperature, weather_city FROM weather_cache WHERE cache_date = %s AND city = %s",
+                [cache_date, city_key[:64]],
+            )
+            row = c.fetchone()
+        if not row:
+            return None
+        return {
+            "weather": (row[0] or "").strip(),
+            "temperature": row[1],
+            "city": (row[2] or city_key).strip(),
+        }
+    except Exception as e:
+        logger.info("[今日养生] 读取天气缓存失败: %s", e)
+        return None
+
+
+def _save_weather_to_db(cache_date, city_key, weather_dict):
+    """将天气写入数据库，按天按城市只存一份。"""
+    if not city_key or not cache_date or not weather_dict:
+        return
+    try:
+        w = (weather_dict.get("weather") or "").strip()[:64]
+        t = weather_dict.get("temperature")
+        display_city = (weather_dict.get("city") or city_key).strip()[:64]
+        with connection.cursor() as c:
+            c.execute(
+                """INSERT INTO weather_cache (cache_date, city, weather, temperature, weather_city, created_at)
+                   VALUES (%s, %s, %s, %s, %s, NOW())
+                   ON DUPLICATE KEY UPDATE weather = VALUES(weather), temperature = VALUES(temperature),
+                   weather_city = VALUES(weather_city), created_at = NOW()""",
+                [cache_date, city_key[:64], w, t, display_city],
+            )
+    except Exception as e:
+        logger.info("[今日养生] 写入天气缓存失败: %s", e)
+
+
 def _get_weather_for_location(city):
     """获取当地天气：先试 uapis.cn，失败则用 wttr.in。返回 dict(weather, temperature, city) 或 None。"""
     if not city:
@@ -484,7 +527,12 @@ def daily_health(request):
 
     city = _get_user_location_for_health(user_id, request)
     logger.info("[今日养生] IP 属地 city=%s (None 表示本地/内网/未知或解析失败)", city)
-    weather = _get_weather_for_location(city) if city else None
+    city_key = _normalize_city_for_weather(city) if city else None
+    weather = _get_weather_from_db(today, city_key) if city_key else None
+    if weather is None and city_key:
+        weather = _get_weather_for_location(city)
+        if weather:
+            _save_weather_to_db(today, city_key, weather)
     logger.info("[今日养生] 天气 API 结果: %s", "有" if weather else "None")
     # 今日养生仅使用 API 返回的 weather（天气状况）与 temperature（当前温度 °C）
     weather_str = ""
