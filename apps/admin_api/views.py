@@ -14,6 +14,7 @@ from rest_framework.response import Response
 from .auth import admin_api_required, _result
 from apps.account.models import User, WithdrawApply
 from apps.community.models import Post, Report
+from apps.system.models import Announcement
 
 
 # ---------- 核心数据看板（替代原仪表盘） ----------
@@ -784,6 +785,206 @@ def ai_prompt_get(request, key):
         return Response(_result(data=item))
     except Exception as e:
         return Response(_result(500, str(e)), status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+
+
+# ---------- 平台公告 ----------
+@api_view(["GET"])
+@admin_api_required
+def announcement_list(request):
+    """平台公告列表，支持 status=1|0，keyword 搜标题，分页"""
+    status_val = request.GET.get("status")
+    try:
+        status_int = int(status_val) if status_val not in (None, "") else None
+    except ValueError:
+        status_int = None
+    keyword = (request.GET.get("keyword") or "").strip()[:50]
+    page = max(1, int(request.GET.get("page") or 1))
+    page_size = min(50, max(1, int(request.GET.get("page_size") or 20)))
+    start = (page - 1) * page_size
+    qs = Announcement.objects.all().order_by("-sort_order", "-created_at")
+    if status_int is not None:
+        qs = qs.filter(status=status_int)
+    if keyword:
+        qs = qs.filter(title__icontains=keyword)
+    total = qs.count()
+    items = list(qs[start : start + page_size])
+    out = []
+    for a in items:
+        out.append({
+            "id": a.id,
+            "title": a.title or "",
+            "content": (a.content or "")[:500],
+            "linkUrl": a.link_url or "",
+            "status": a.status,
+            "sortOrder": a.sort_order,
+            "startAt": a.start_at.isoformat() if a.start_at else None,
+            "endAt": a.end_at.isoformat() if a.end_at else None,
+            "createdAt": a.created_at.isoformat() if a.created_at else None,
+        })
+    return Response(_result(data={"list": out, "total": total, "hasMore": len(items) == page_size}))
+
+
+@api_view(["POST"])
+@admin_api_required
+def announcement_create(request):
+    """新增平台公告。body: title, content?, linkUrl?, status?, sortOrder?, startAt?, endAt?"""
+    try:
+        data = request.data or {}
+        title = (data.get("title") or "").strip()[:128]
+        if not title:
+            return Response(_result(400, "标题不能为空"), status=status.HTTP_400_BAD_REQUEST)
+        content = (data.get("content") or "").strip() or None
+        link_url = (data.get("linkUrl") or data.get("link_url") or "").strip()[:512] or None
+        try:
+            status_int = int(data.get("status", 1))
+        except (TypeError, ValueError):
+            status_int = 1
+        status_int = 1 if status_int != 0 else 0
+        try:
+            sort_order = int(data.get("sortOrder") or data.get("sort_order") or 0)
+        except (TypeError, ValueError):
+            sort_order = 0
+        from django.utils.dateparse import parse_datetime
+        start_at = None
+        end_at = None
+        for key in ("startAt", "start_at"):
+            raw = data.get(key)
+            if raw:
+                try:
+                    dt = parse_datetime(str(raw))
+                    if dt:
+                        start_at = dt
+                        break
+                except Exception:
+                    pass
+        for key in ("endAt", "end_at"):
+            raw = data.get(key)
+            if raw:
+                try:
+                    dt = parse_datetime(str(raw))
+                    if dt:
+                        end_at = dt
+                        break
+                except Exception:
+                    pass
+        a = Announcement.objects.create(
+            title=title,
+            content=content,
+            link_url=link_url,
+            status=status_int,
+            sort_order=sort_order,
+            start_at=start_at,
+            end_at=end_at,
+        )
+        return Response(_result(data={"id": a.id, "message": "已创建"}))
+    except Exception as e:
+        return Response(_result(500, str(e)), status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+
+
+def _parse_optional_datetime(data, key):
+    raw = data.get(key) or data.get(key.replace("At", "_at"))
+    if not raw:
+        return None
+    from django.utils.dateparse import parse_datetime
+    try:
+        return parse_datetime(str(raw))
+    except Exception:
+        return None
+
+
+@api_view(["GET"])
+@admin_api_required
+def announcement_get(request, announcement_id):
+    """单条平台公告详情（编辑用）"""
+    a = Announcement.objects.filter(id=announcement_id).first()
+    if not a:
+        return Response(_result(404, "公告不存在"), status=status.HTTP_404_NOT_FOUND)
+    return Response(_result(data={
+        "id": a.id,
+        "title": a.title or "",
+        "content": a.content or "",
+        "linkUrl": a.link_url or "",
+        "status": a.status,
+        "sortOrder": a.sort_order,
+        "startAt": a.start_at.isoformat() if a.start_at else None,
+        "endAt": a.end_at.isoformat() if a.end_at else None,
+        "createdAt": a.created_at.isoformat() if a.created_at else None,
+    }))
+
+
+@api_view(["PUT", "POST"])
+@admin_api_required
+def announcement_update(request, announcement_id):
+    """更新平台公告。body: title?, content?, linkUrl?, status?, sortOrder?, startAt?, endAt?"""
+    a = Announcement.objects.filter(id=announcement_id).first()
+    if not a:
+        return Response(_result(404, "公告不存在"), status=status.HTTP_404_NOT_FOUND)
+    try:
+        data = request.data or {}
+        title = (data.get("title") or "").strip()[:128]
+        if title:
+            a.title = title
+        content = data.get("content")
+        if content is not None:
+            a.content = (content or "").strip() or None
+        link_url = data.get("linkUrl") or data.get("link_url")
+        if link_url is not None:
+            val = (str(link_url).strip() or None)
+            a.link_url = (val[:512] if val else None)
+        if "status" in data:
+            try:
+                a.status = 0 if int(data.get("status")) == 0 else 1
+            except (TypeError, ValueError):
+                pass
+        if "sortOrder" in data or "sort_order" in data:
+            try:
+                a.sort_order = int(data.get("sortOrder") or data.get("sort_order") or 0)
+            except (TypeError, ValueError):
+                pass
+        start_at = _parse_optional_datetime(data, "startAt")
+        if start_at is not None:
+            a.start_at = start_at
+        end_at = _parse_optional_datetime(data, "endAt")
+        if end_at is not None:
+            a.end_at = end_at
+        a.save()
+        return Response(_result(data={"message": "已保存"}))
+    except Exception as e:
+        return Response(_result(500, str(e)), status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+
+
+@api_view(["POST"])
+@admin_api_required
+def announcement_set_status(request, announcement_id):
+    """上/下架公告：status=1 展示 0 下架"""
+    try:
+        status_val = request.data.get("status")
+        if status_val is None:
+            return Response(_result(400, "缺少 status"), status=status.HTTP_400_BAD_REQUEST)
+        s = 0 if int(status_val) == 0 else 1
+        a = Announcement.objects.filter(id=announcement_id).first()
+        if not a:
+            return Response(_result(404, "公告不存在"), status=status.HTTP_404_NOT_FOUND)
+        Announcement.objects.filter(id=announcement_id).update(status=s)
+        return Response(_result(data={"message": "已下架" if s == 0 else "已上架"}))
+    except Exception as e:
+        return Response(_result(500, str(e)), status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+
+
+@api_view(["POST"])
+@admin_api_required
+def announcement_delete(request, announcement_id):
+    """删除公告（物理删除）"""
+    a = Announcement.objects.filter(id=announcement_id).first()
+    if not a:
+        return Response(_result(404, "公告不存在"), status=status.HTTP_404_NOT_FOUND)
+    a.delete()
+    return Response(_result(data={"message": "已删除"}))
+
+
+# ---------- AI 提示词配置 ----------
+# 不在后台展示/编辑的 key（仅由代码使用默认提示词）
+AI_PROMPT_HIDDEN_KEYS = {"xiyongshen"}
 
 
 @api_view(["PUT", "POST"])

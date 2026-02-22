@@ -15,6 +15,8 @@ class Announcement(models.Model):
     class Meta:
         db_table = "announcement"
         managed = False
+        verbose_name = "平台公告"
+        verbose_name_plural = "平台公告"
 
 
 class Banner(models.Model):

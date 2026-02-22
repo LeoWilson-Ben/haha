@@ -53,15 +53,15 @@ def _get_ai_prompt(key, default="", **replacements):
         return default
 
 
-# 豆包 ARK：统一使用 Doubao-Seed-1.6-flash，环境变量 ARK_API_KEY 优先
-ARK_API_KEY = os.getenv("ARK_API_KEY", "e8c3c4e5-0a31-4690-8e79-3fc86b12061b")
-ARK_BASE_URL = "https://ark.cn-beijing.volces.com/api/v3"
-LLM_MODEL = "doubao-seed-1-6-flash-250828"
+# 通义千问（DashScope）：OpenAI 兼容接口，环境变量 DASHSCOPE_API_KEY 优先
+DASHSCOPE_API_KEY = os.getenv("DASHSCOPE_API_KEY", "sk-0c014d6601794c9dbb248ea6892dcd55")
+LLM_BASE_URL = "https://dashscope.aliyuncs.com/compatible-mode/v1"
+LLM_MODEL = "qwen-turbo"
 
 
 def _get_llm_client():
     from openai import OpenAI
-    return OpenAI(api_key=ARK_API_KEY, base_url=ARK_BASE_URL)
+    return OpenAI(api_key=DASHSCOPE_API_KEY, base_url=LLM_BASE_URL)
 
 
 @api_view(["POST"])
@@ -712,18 +712,22 @@ def fengshui_item_analyze(request):
     if direction not in valid_directions:
         return Response(_result(400, "无效方位"), status=status.HTTP_400_BAD_REQUEST)
 
-    default_prompt = f"""【{direction}】方位放【{item_name}】的吉凶？用一句话：先给结论（大吉/吉/平/小凶/凶/大凶），再一句理由。"""
+    default_prompt = f"""你是一位传统文化风水师。用户询问在【{direction}】方位放置【{item_name}】的吉凶。
+
+请简要回答（控制在 100 字以内）：
+1. 吉凶结论（吉/凶/平，或大吉/小吉/平/小凶/大凶）
+2. 简要理由（1-2 句）
+用专业且通俗的语气，直接给出结论。"""
     prompt = _get_ai_prompt("fengshui_item", default_prompt, direction=direction, item_name=item_name)
     try:
         client = _get_llm_client()
         completion = client.chat.completions.create(
             model=LLM_MODEL,
             messages=[
-                {"role": "system", "content": "风水师，一句话给吉凶结论+理由。"},
+                {"role": "system", "content": "你是传统文化风水师，用简洁专业的口吻回答问题。"},
                 {"role": "user", "content": prompt},
             ],
-            max_tokens=120,
-            timeout=15.0,
+            timeout=30.0,
         )
         content = (completion.choices[0].message.content if completion.choices else "").strip() or "宜根据实际格局综合判断。"
         fortune = "平"
