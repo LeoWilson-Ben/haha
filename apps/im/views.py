@@ -317,8 +317,12 @@ def message_list(request, conversation_id):
 
     page = max(1, int(request.GET.get("page") or 1))
     page_size = min(50, max(1, int(request.GET.get("page_size") or 20)))
+    keyword = (request.GET.get("keyword") or "").strip()
     start = (page - 1) * page_size
-    qs = Message.objects.filter(conversation_id=conversation_id, status=1).order_by("-id")[start : start + page_size]
+    qs = Message.objects.filter(conversation_id=conversation_id, status=1)
+    if keyword:
+        qs = qs.filter(content_encrypted__icontains=keyword)
+    qs = qs.order_by("-id")[start : start + page_size]
     msgs = list(reversed(list(qs)))
     sender_ids = list({m.sender_id for m in msgs})
     users = {u.id: u for u in User.objects.filter(id__in=sender_ids)} if sender_ids else {}
@@ -444,6 +448,7 @@ def group_info(request, conversation_id):
     grp = ImGroup.objects.filter(conversation_id=conversation_id).first()
     member_count = ConversationMember.objects.filter(conversation_id=conversation_id).count()
     is_public = False
+    announcement = None
     if grp:
         try:
             with connection.cursor() as cur:
@@ -451,14 +456,26 @@ def group_info(request, conversation_id):
                 row = cur.fetchone()
                 if row is not None:
                     is_public = bool(row[0])
+                cur.execute("SELECT announcement FROM im_group WHERE conversation_id = %s", [conversation_id])
+                row2 = cur.fetchone()
+                if row2 is not None and row2[0]:
+                    announcement = (str(row2[0]) or "").strip() or None
         except Exception:
-            pass
+            try:
+                with connection.cursor() as cur:
+                    cur.execute("SELECT is_public FROM im_group WHERE conversation_id = %s", [conversation_id])
+                    row = cur.fetchone()
+                    if row is not None:
+                        is_public = bool(row[0])
+            except Exception:
+                pass
     return Response(_result(data={
         "name": conv.name or "群聊",
         "memberCount": member_count,
         "isOwner": bool(grp and grp.owner_id == user_id),
         "mute": bool(cm.mute),
         "isPublic": is_public,
+        "announcement": announcement,
     }))
 
 
@@ -507,6 +524,22 @@ def update_group(request, conversation_id):
                     status=status.HTTP_500_INTERNAL_SERVER_ERROR,
                 )
             raise
+
+    announcement = request.data.get("announcement")
+    if announcement is not None and grp and is_owner:
+        ann_text = (str(announcement) or "").strip()[:500] or None
+        try:
+            with connection.cursor() as cur:
+                cur.execute(
+                    "UPDATE im_group SET announcement = %s WHERE conversation_id = %s",
+                    [ann_text, conversation_id],
+                )
+        except Exception as e:
+            err = str(e)
+            if "Unknown column" in err or "announcement" in err.lower():
+                pass  # 未执行 migrate_group_announcement.sql 时忽略
+            else:
+                raise
 
     return Response(_result(data={"message": "已更新"}))
 
