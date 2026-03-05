@@ -40,6 +40,11 @@
    - 其余 Bucket/Endpoint/凭据已按你的信息写好，一般无需再改。
 3. 在 OSS 控制台将 Bucket **读权限设为私有**（不设公共读），写权限保持私有，仅服务端用 AK 上传。
 
+4. **防盗链（Referer）**：若 APP/网页加载图片出现 **403**，多半是 Bucket 开启了 Referer 白名单且未允许空 Referer。  
+   - 阿里云控制台 → OSS → 选择 Bucket `xuanyuapp` → **数据安全** → **防盗链**  
+   - 在「Referer 白名单」中**勾选「允许空 Referer」**，或添加你的域名（如 `https://www.lingshu.uno`）后保存。  
+   - 否则 Flutter/浏览器请求图片时无 Referer 或 Referer 不在白名单，OSS 会返回 403。
+
 不启用时保持 `ALIYUN_OSS_ENABLED=0`，上传继续走本地。
 
 ---

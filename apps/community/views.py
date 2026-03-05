@@ -3,6 +3,7 @@
 """
 import json
 import re
+from django.conf import settings
 from django.db import connection
 from django.db.models import Q, F, Sum
 from rest_framework import status
@@ -62,6 +63,18 @@ def _post_item(p, u, topic_list, liked=False, favorited=False):
     if getattr(p, "media_cover_urls_json", None):
         try:
             media_cover_urls = json.loads(p.media_cover_urls_json) if isinstance(p.media_cover_urls_json, str) else p.media_cover_urls_json
+        except Exception:
+            pass
+    # 若启用 OSS 且为私有读，每次返回帖子时用新签名替换过期 URL，避免 403
+    if getattr(settings, "ALIYUN_OSS_ENABLED", False) and getattr(settings, "ALIYUN_OSS_BUCKET", ""):
+        try:
+            from apps.system.oss_upload import refresh_signed_url
+            expires = getattr(settings, "ALIYUN_OSS_SIGNED_URL_EXPIRES", 604800)
+            bucket = settings.ALIYUN_OSS_BUCKET
+            endpoint = getattr(settings, "ALIYUN_OSS_ENDPOINT", "oss-cn-beijing.aliyuncs.com")
+            cred = getattr(settings, "ALIYUN_OSS_CREDENTIAL_FILE", "")
+            media_urls = [refresh_signed_url(u, bucket, endpoint, cred, expires) if u else u for u in (media_urls or [])]
+            media_cover_urls = [refresh_signed_url(u, bucket, endpoint, cred, expires) if u else u for u in (media_cover_urls or [])]
         except Exception:
             pass
     tags = []

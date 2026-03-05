@@ -5,6 +5,7 @@
 """
 import logging
 from pathlib import Path
+from urllib.parse import urlparse, unquote
 
 logger = logging.getLogger(__name__)
 
@@ -132,6 +133,42 @@ def get_presigned_upload_urls(
     except Exception as e:
         logger.exception("OSS 预签名生成失败: %s", e)
         return None, None, str(e)
+
+
+def refresh_signed_url(oss_url, bucket, endpoint, credential_file, signed_url_expires=604800):
+    """
+    根据已有 OSS 签名 URL 或同 Bucket 的 OSS 地址，用当前凭据重新生成签名 URL（解决过期 403）。
+    若 URL 不是本 Bucket 的 OSS 地址或解析失败，原样返回。
+    """
+    if not oss_url or not isinstance(oss_url, str) or not oss_url.strip():
+        return oss_url
+    try:
+        parsed = urlparse(oss_url.strip())
+        # 例如 https://xuanyuapp.oss-cn-beijing.aliyuncs.com/image%2Fxxx.jpg?...
+        netloc = (parsed.netloc or "").lower()
+        if not netloc or bucket not in netloc or "aliyuncs.com" not in netloc:
+            return oss_url
+        path = (parsed.path or "").strip().lstrip("/")
+        if not path:
+            return oss_url
+        object_key = unquote(path)
+    except Exception:
+        return oss_url
+    access_key_id, access_key_secret = _load_credential(credential_file)
+    if not access_key_id or not access_key_secret:
+        return oss_url
+    try:
+        import oss2
+    except ImportError:
+        return oss_url
+    try:
+        auth = oss2.Auth(access_key_id, access_key_secret)
+        ep = endpoint if endpoint.startswith("http") else f"https://{endpoint}"
+        bucket_obj = oss2.Bucket(auth, ep, bucket)
+        return bucket_obj.sign_url("GET", object_key, signed_url_expires)
+    except Exception as e:
+        logger.warning("OSS 刷新签名失败 %s: %s", object_key, e)
+        return oss_url
 
 
 def download_oss_to_path(object_name, local_path, bucket, endpoint, credential_file):
