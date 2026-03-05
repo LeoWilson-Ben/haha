@@ -15,6 +15,7 @@ from .auth import admin_api_required, _result
 from apps.account.models import User, WithdrawApply
 from apps.community.models import Post, Report, SystemNotification
 from apps.system.models import Announcement
+from apps.system.oss_upload import refresh_oss_url_if_applicable
 
 
 def _send_announcement_system_notification(announcement):
@@ -676,7 +677,7 @@ def user_list(request):
             "id": u.id,
             "mobile": u.mobile or "",
             "nickname": u.nickname or f"用户{u.id}",
-            "avatarUrl": getattr(u, "avatar_url", None) or "",
+            "avatarUrl": refresh_oss_url_if_applicable(getattr(u, "avatar_url", None)) or "",
             "status": u.status,
             "createdAt": u.created_at.isoformat() if u.created_at else None,
         })

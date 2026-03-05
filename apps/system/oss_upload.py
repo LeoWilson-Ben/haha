@@ -171,6 +171,26 @@ def refresh_signed_url(oss_url, bucket, endpoint, credential_file, signed_url_ex
         return oss_url
 
 
+def refresh_oss_url_if_applicable(url):
+    """
+    若 url 为本项目配置的 OSS 签名地址，则用当前凭据重新生成签名 URL（用于头像、封面等，解决过期 403）。
+    否则原样返回。需在 Django 环境内调用（依赖 settings）。
+    """
+    if not url or not isinstance(url, str) or not url.strip():
+        return url
+    try:
+        from django.conf import settings
+        if not getattr(settings, "ALIYUN_OSS_ENABLED", False) or not getattr(settings, "ALIYUN_OSS_BUCKET", ""):
+            return url
+        bucket = settings.ALIYUN_OSS_BUCKET
+        endpoint = getattr(settings, "ALIYUN_OSS_ENDPOINT", "oss-cn-beijing.aliyuncs.com")
+        cred = getattr(settings, "ALIYUN_OSS_CREDENTIAL_FILE", "")
+        expires = getattr(settings, "ALIYUN_OSS_SIGNED_URL_EXPIRES", 604800)
+        return refresh_signed_url(url.strip(), bucket, endpoint, cred, expires)
+    except Exception:
+        return url
+
+
 def download_oss_to_path(object_name, local_path, bucket, endpoint, credential_file):
     """将 OSS 对象下载到本地，用于服务端截视频封面等。返回 (True, None) 或 (False, error_message)。"""
     path = Path(local_path)

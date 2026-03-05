@@ -179,13 +179,15 @@ def room_join(request):
         peer = User.objects.get(id=peer_id, status=1)
     except User.DoesNotExist:
         peer = None
+    from apps.system.oss_upload import refresh_oss_url_if_applicable
+    _av = refresh_oss_url_if_applicable(getattr(peer, "avatar_url", None)) or ""
     peer_info = {
         "user_id": peer_id,
         "userId": peer_id,
         "nickname": getattr(peer, "nickname", None) or f"用户{peer_id}",
         "nickName": getattr(peer, "nickname", None) or f"用户{peer_id}",
-        "avatar_url": getattr(peer, "avatar_url", None) or "",
-        "avatarUrl": getattr(peer, "avatar_url", None) or "",
+        "avatar_url": _av,
+        "avatarUrl": _av,
     }
 
     uid = _uid_for_agora(user_id)

@@ -23,6 +23,7 @@ from rest_framework.permissions import AllowAny
 from rest_framework.response import Response
 
 from apps.account.session_store import get_user_id_by_token
+from apps.system.oss_upload import refresh_oss_url_if_applicable
 
 
 def _result(code=0, message="success", data=None):
@@ -1195,7 +1196,7 @@ def xiyongshen_match(request):
             items.append({
                 "userId": uid,
                 "nickname": r[1] or f"用户{uid}",
-                "avatarUrl": r[2] if len(r) > 2 else None,
+                "avatarUrl": refresh_oss_url_if_applicable(r[2]) if len(r) > 2 else None,
                 "intro": r[3] if len(r) > 3 else "暂无介绍",
                 "喜神": other_xi,
                 "用神": other_yong,
@@ -1253,7 +1254,7 @@ def birth_match_list(request):
     for r in rows:
         uid = r[0]
         nickname = r[1] or f"用户{uid}"
-        avatar_url = r[2]
+        avatar_url = refresh_oss_url_if_applicable(r[2]) if len(r) > 2 else None
         intro = (r[3] or "暂无介绍") if len(r) > 3 else "暂无介绍"
         birth_time_val = str(r[4]).strip() if len(r) > 4 and r[4] else None
         items.append({
@@ -1431,7 +1432,7 @@ def fate_match(request):
     for r in rows:
         uid = r[0]
         nickname = r[1] or f"用户{uid}"
-        avatar_url = r[2]
+        avatar_url = refresh_oss_url_if_applicable(r[2]) if len(r) > 2 else None
         u_gender = r[3]
         bd = r[4]
         birth_time_val = str(r[5]).strip() if len(r) > 5 and r[5] else None

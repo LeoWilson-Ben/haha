@@ -12,6 +12,20 @@ from rest_framework.response import Response
 from .models import User, UserWallet, WalletLog, OrderMain, WithdrawApply
 from .session_store import create_session, get_user_id_by_token
 
+
+def _avatar_url_for_response(avatar_url):
+    """返回用于接口的头像 URL，若为 OSS 地址则刷新签名避免过期 403。"""
+    if not avatar_url:
+        return avatar_url
+    if not getattr(settings, "ALIYUN_OSS_ENABLED", False):
+        return avatar_url
+    try:
+        from apps.system.oss_upload import refresh_oss_url_if_applicable
+        return refresh_oss_url_if_applicable(avatar_url)
+    except Exception:
+        return avatar_url
+
+
 SMS_CODE_PREFIX = "sms:code:"
 CODE_TTL = 5 * 60  # 5 分钟
 MOBILE_PATTERN = re.compile(r"^1[3-9]\d{9}$")
@@ -179,7 +193,7 @@ def login(request):
                 "userId": user.id,
                 "userCode": user_code,
                 "nickname": user.nickname,
-                "avatarUrl": user.avatar_url,
+                "avatarUrl": _avatar_url_for_response(user.avatar_url),
                 "minorMode": user.minor_mode or 0,
                 "isNewUser": False,
             }
@@ -243,7 +257,7 @@ def register(request):
                 "userId": user.id,
                 "userCode": user_code,
                 "nickname": user.nickname,
-                "avatarUrl": user.avatar_url,
+                "avatarUrl": _avatar_url_for_response(user.avatar_url),
                 "minorMode": user.minor_mode or 0,
                 "isNewUser": True,
             }
@@ -285,7 +299,7 @@ def login_by_password(request):
                 "userId": user.id,
                 "userCode": user_code,
                 "nickname": user.nickname,
-                "avatarUrl": user.avatar_url,
+                "avatarUrl": _avatar_url_for_response(user.avatar_url),
                 "minorMode": user.minor_mode or 0,
                 "isNewUser": False,
             }
@@ -500,7 +514,7 @@ def me(request):
         "userCode": _get_user_code(user.id),
         "mobile": user.mobile,
         "nickname": user.nickname or "",
-        "avatarUrl": user.avatar_url or "",
+        "avatarUrl": _avatar_url_for_response(user.avatar_url) or "",
         "gender": user.gender,
         "minorMode": user.minor_mode or 0,
         "intro": profile["intro"],
@@ -671,7 +685,7 @@ def update_profile(request):
     prof = _get_user_profile(user_id)
     return Response(_result(data={
         "nickname": user.nickname,
-        "avatarUrl": user.avatar_url,
+        "avatarUrl": _avatar_url_for_response(user.avatar_url),
         "gender": user.gender,
         "intro": prof["intro"],
         "birthDate": prof["birthDate"],

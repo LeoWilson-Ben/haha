@@ -12,6 +12,7 @@ from rest_framework.response import Response
 
 from apps.account.models import User, UserWallet, WalletLog
 from apps.account.session_store import get_user_id_by_token
+from apps.system.oss_upload import refresh_oss_url_if_applicable
 from .models import Conversation, ConversationMember, Message, ChatApply, ImGroup
 
 
@@ -108,7 +109,7 @@ def conversation_list(request):
                 item["peerUserId"] = peer_id
                 u = users.get(peer_id)
                 if u:
-                    item["avatarUrl"] = getattr(u, "avatar_url", None) or None
+                    item["avatarUrl"] = refresh_oss_url_if_applicable(getattr(u, "avatar_url", None)) or None
         items.append(item)
     return Response(_result(data={"list": items}))
 
@@ -328,7 +329,7 @@ def message_list(request, conversation_id):
             "id": m.id,
             "senderId": m.sender_id,
             "nickname": getattr(u, "nickname", None) or f"用户{m.sender_id}",
-            "avatarUrl": getattr(u, "avatar_url", None),
+            "avatarUrl": refresh_oss_url_if_applicable(getattr(u, "avatar_url", None)),
             "type": m.type,
             "content": m.content_encrypted or "",
             "createdAt": m.created_at.isoformat() if m.created_at else None,
@@ -368,7 +369,7 @@ def send_message(request, conversation_id):
         "id": msg.id,
         "senderId": msg.sender_id,
         "nickname": getattr(u, "nickname", None) or f"用户{user_id}",
-        "avatarUrl": getattr(u, "avatar_url", None),
+        "avatarUrl": refresh_oss_url_if_applicable(getattr(u, "avatar_url", None)),
         "type": msg.type,
         "content": msg.content_encrypted,
         "createdAt": msg.created_at.isoformat(),
@@ -392,7 +393,7 @@ def chat_apply_list(request):
             "id": a.id,
             "fromUserId": a.from_user_id,
             "fromNickname": getattr(u, "nickname", None) or f"用户{a.from_user_id}",
-            "fromAvatarUrl": getattr(u, "avatar_url", None),
+            "fromAvatarUrl": refresh_oss_url_if_applicable(getattr(u, "avatar_url", None)),
             "createdAt": a.created_at.isoformat() if a.created_at else None,
         })
     return Response(_result(data={"list": items}))
@@ -421,7 +422,7 @@ def group_members(request, conversation_id):
         items.append({
             "userId": m.user_id,
             "nickname": getattr(u, "nickname", None) or f"用户{m.user_id}",
-            "avatarUrl": getattr(u, "avatar_url", None),
+            "avatarUrl": refresh_oss_url_if_applicable(getattr(u, "avatar_url", None)),
             "role": m.role or "member",
         })
     return Response(_result(data={"list": items, "isOwner": is_owner}))
@@ -736,7 +737,7 @@ def group_join_apply_list(request):
             "type": "group",
             "fromUserId": from_user_id,
             "fromNickname": getattr(u, "nickname", None) or f"用户{from_user_id}",
-            "fromAvatarUrl": getattr(u, "avatar_url", None),
+            "fromAvatarUrl": refresh_oss_url_if_applicable(getattr(u, "avatar_url", None)),
             "conversationId": conv_id,
             "groupName": group_name or "群聊",
             "createdAt": created_at.isoformat() if hasattr(created_at, "isoformat") else str(created_at),

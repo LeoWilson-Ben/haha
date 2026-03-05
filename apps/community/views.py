@@ -13,6 +13,7 @@ from rest_framework.response import Response
 
 from apps.account.models import User
 from apps.account.session_store import get_user_id_by_token
+from apps.system.oss_upload import refresh_oss_url_if_applicable
 from apps.system.views import get_ip_location_for_request
 from .models import Topic, Post, Comment, PostLike, PostFavorite, UserFollow, Report, Notification, SystemNotification
 
@@ -77,6 +78,7 @@ def _post_item(p, u, topic_list, liked=False, favorited=False):
             media_cover_urls = [refresh_signed_url(u, bucket, endpoint, cred, expires) if u else u for u in (media_cover_urls or [])]
         except Exception:
             pass
+    avatar_url_out = refresh_oss_url_if_applicable(getattr(u, "avatar_url", None))
     tags = []
     if getattr(p, "tags_json", None):
         try:
@@ -88,7 +90,7 @@ def _post_item(p, u, topic_list, liked=False, favorited=False):
         "id": p.id,
         "userId": p.user_id,
         "nickname": getattr(u, "nickname", None) or f"用户{p.user_id}",
-        "avatarUrl": getattr(u, "avatar_url", None),
+        "avatarUrl": avatar_url_out,
         "content": p.content or "",
         "mediaType": p.media_type,
         "mediaUrls": media_urls,
@@ -324,7 +326,7 @@ def comment_list(request, post_id):
             "id": c.id,
             "userId": c.user_id,
             "nickname": (getattr(users.get(c.user_id), "nickname", None) if users.get(c.user_id) else None) or f"用户{c.user_id}",
-            "avatarUrl": getattr(users.get(c.user_id), "avatar_url", None) if users.get(c.user_id) else None,
+            "avatarUrl": refresh_oss_url_if_applicable(getattr(users.get(c.user_id), "avatar_url", None)) if users.get(c.user_id) else None,
             "parentId": c.parent_id,
             "content": c.content,
             "likeCount": c.like_count,
@@ -562,18 +564,18 @@ def user_search(request):
         if len(keyword) == 8:
             u = User.objects.filter(status=1, user_code=keyword).first()
             if u:
-                items = [{"userId": u.id, "userCode": getattr(u, "user_code", None) or _get_user_code(u.id), "nickname": u.nickname or f"用户{u.id}", "avatarUrl": u.avatar_url}]
+                items = [{"userId": u.id, "userCode": getattr(u, "user_code", None) or _get_user_code(u.id), "nickname": u.nickname or f"用户{u.id}", "avatarUrl": refresh_oss_url_if_applicable(u.avatar_url)}]
         else:
             try:
                 uid = int(keyword)
                 u = User.objects.filter(id=uid, status=1).first()
                 if u:
-                    items = [{"userId": u.id, "userCode": getattr(u, "user_code", None) or _get_user_code(u.id), "nickname": u.nickname or f"用户{u.id}", "avatarUrl": u.avatar_url}]
+                    items = [{"userId": u.id, "userCode": getattr(u, "user_code", None) or _get_user_code(u.id), "nickname": u.nickname or f"用户{u.id}", "avatarUrl": refresh_oss_url_if_applicable(u.avatar_url)}]
             except (ValueError, TypeError):
                 pass
     if not items:
         qs = User.objects.filter(status=1).filter(Q(nickname__icontains=keyword)).order_by("-id")[(page - 1) * page_size : page * page_size]
-        items = [{"userId": u.id, "userCode": getattr(u, "user_code", None) or _get_user_code(u.id), "nickname": u.nickname or f"用户{u.id}", "avatarUrl": u.avatar_url} for u in qs]
+        items = [{"userId": u.id, "userCode": getattr(u, "user_code", None) or _get_user_code(u.id), "nickname": u.nickname or f"用户{u.id}", "avatarUrl": refresh_oss_url_if_applicable(u.avatar_url)} for u in qs]
     return Response(_result(data={"list": items, "hasMore": len(items) == page_size}))
 
 
@@ -671,7 +673,7 @@ def user_profile(request, user_id):
         "userId": u.id,
         "userCode": getattr(u, "user_code", None) or _get_user_code(u.id),
         "nickname": u.nickname or f"用户{u.id}",
-        "avatarUrl": u.avatar_url,
+        "avatarUrl": refresh_oss_url_if_applicable(u.avatar_url),
         "gender": getattr(u, "gender", None),
         "following": following,
         "intro": prof["intro"],
@@ -787,7 +789,7 @@ def my_following_list(request):
             "userId": u.id,
             "userCode": getattr(u, "user_code", None) or _get_user_code(u.id),
             "nickname": u.nickname or f"用户{u.id}",
-            "avatarUrl": u.avatar_url,
+            "avatarUrl": refresh_oss_url_if_applicable(u.avatar_url),
             "intro": prof.get("intro") or "暂无介绍",
         })
     return Response(_result(data={"list": items}))
@@ -813,7 +815,7 @@ def my_followers_list(request):
             "userId": u.id,
             "userCode": getattr(u, "user_code", None) or _get_user_code(u.id),
             "nickname": u.nickname or f"用户{u.id}",
-            "avatarUrl": u.avatar_url,
+            "avatarUrl": refresh_oss_url_if_applicable(u.avatar_url),
             "intro": prof.get("intro") or "暂无介绍",
         })
     return Response(_result(data={"list": items}))
@@ -855,7 +857,7 @@ def masters_list(request):
             "userId": uid,
             "userCode": _get_user_code(uid),
             "nickname": r[1] or f"名师{uid}",
-            "avatarUrl": r[2] if len(r) > 2 else None,
+            "avatarUrl": refresh_oss_url_if_applicable(r[2]) if len(r) > 2 else None,
             "intro": r[3] if len(r) > 3 else "认证名师",
             "consultPrice": round(consult_price, 2),
         })
@@ -981,7 +983,7 @@ def notification_list(request):
             "typeText": type_text.get(n.type, n.type),
             "fromUserId": n.from_user_id,
             "fromNickname": getattr(u, "nickname", None) or f"用户{n.from_user_id}",
-            "fromAvatarUrl": getattr(u, "avatar_url", None),
+            "fromAvatarUrl": refresh_oss_url_if_applicable(getattr(u, "avatar_url", None)),
             "postId": n.post_id,
             "commentId": n.comment_id,
             "contentSnippet": n.content_snippet or "",
